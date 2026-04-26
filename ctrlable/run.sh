@@ -121,10 +121,10 @@ if [ -f "$CREDS_FILE" ]; then
                     -H "X-Device-Token: $DEVICE_TOKEN" \
                     -d "{\"lan_subnet\":\"$LAN_SUBNET\",\"lan_access_enabled\":true}" \
                     2>/dev/null) || REG=""
-                if echo "$REG" | grep -q '"lan_access_enabled":true'; then
+                if [ -n "$REG" ] && ! echo "$REG" | grep -q '"detail"'; then
                     info "LAN access registered: $LAN_SUBNET"
                 else
-                    warn "LAN registration failed — will retry on next restart"
+                    warn "LAN registration failed (${REG:-no response}) — will retry on next restart"
                 fi
             fi
 
