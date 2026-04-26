@@ -57,6 +57,15 @@ setup_nat() {
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
     if command -v nft >/dev/null 2>&1; then
         nft add table ip ctrlnat 2>/dev/null || true
+        # FORWARD: allow VPN ↔ LAN in both directions
+        nft add chain ip ctrlnat forward \
+            '{ type filter hook forward priority 0; }' 2>/dev/null || true
+        nft flush chain ip ctrlnat forward 2>/dev/null || true
+        nft add rule ip ctrlnat forward \
+            ip saddr 10.10.0.0/16 oif "$lan_iface" accept
+        nft add rule ip ctrlnat forward \
+            ip daddr 10.10.0.0/16 iif "$lan_iface" ct state related,established accept
+        # POSTROUTING: masquerade VPN source IPs going to LAN
         nft add chain ip ctrlnat postrouting \
             '{ type nat hook postrouting priority 100; }' 2>/dev/null || true
         nft flush chain ip ctrlnat postrouting 2>/dev/null || true
