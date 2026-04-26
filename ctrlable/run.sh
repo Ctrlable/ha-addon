@@ -9,7 +9,11 @@ API_BASE="https://portal.ctrlable.com/api/v1"
 
 info()  { echo "[ctrlable] $1"; }
 warn()  { echo "[ctrlable] WARN: $1"; }
-die()   { echo "[ctrlable] ERROR: $1" >&2; exit 1; }
+die()   {
+    echo "[ctrlable] ERROR: $1" >&2
+    echo "[ctrlable] Add-on stopped. Fix the issue and restart."
+    sleep infinity  # prevent s6 restart loop — user must manually restart
+}
 
 # ── JSON helper ───────────────────────────────────────────────────────────────
 json_get() {
@@ -41,7 +45,11 @@ run_heartbeat() {
 
 # ── Bring up tunnel ───────────────────────────────────────────────────────────
 bring_up_tunnel() {
-    mkdir -p "$WG_DIR"
+    local conf_src="$DATA_DIR/$WG_IFACE.conf"
+    mkdir -p "$WG_DIR" && chmod 700 "$WG_DIR"
+    # Copy from persistent /data/ to /etc/wireguard/ each startup
+    cp "$conf_src" "$WG_DIR/$WG_IFACE.conf"
+    chmod 600 "$WG_DIR/$WG_IFACE.conf"
     wg-quick down "$WG_IFACE" 2>/dev/null || true
     wg-quick up "$WG_DIR/$WG_IFACE.conf"
     info "Tunnel up on $WG_IFACE ($TUNNEL_IP)"
@@ -52,12 +60,13 @@ if [ -f "$CREDS_FILE" ]; then
     info "Found existing enrollment — reconnecting"
     # shellcheck source=/dev/null
     source "$CREDS_FILE"
-    if [ -f "$WG_DIR/$WG_IFACE.conf" ]; then
+    if [ -f "$DATA_DIR/$WG_IFACE.conf" ]; then
         bring_up_tunnel
         run_heartbeat
         exit 0
     else
-        warn "WireGuard config missing — re-enrolling"
+        warn "WireGuard config missing from /data/ — cannot reconnect without re-enrolling"
+        die "Delete this add-on, reinstall it, and paste a new enrollment token."
     fi
 fi
 
@@ -67,7 +76,6 @@ ENROLLMENT_TOKEN=$(python3 -c "import json; print(json.load(open('/data/options.
 
 info "Enrolling with Ctrlable..."
 
-# Detect MAC from first non-loopback interface on the host (we share host_network)
 IFACE=$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')
 [ -z "$IFACE" ] && IFACE="eth0"
 MAC=$(cat /sys/class/net/"$IFACE"/address 2>/dev/null || echo "00:00:00:00:00:00")
@@ -94,15 +102,14 @@ WG_B64=$(json_get "wg_config" "$RESPONSE")
 
 info "Enrolled — Device ID: $DEVICE_ID  Tunnel IP: $TUNNEL_IP"
 
-# Decode and write WireGuard config
 WG_CONF=$(b64decode <<< "$WG_B64")
 [ -z "$WG_CONF" ] && die "Failed to decode WireGuard config"
 
-mkdir -p "$WG_DIR" && chmod 700 "$WG_DIR"
-echo "$WG_CONF" > "$WG_DIR/$WG_IFACE.conf"
-chmod 600 "$WG_DIR/$WG_IFACE.conf"
+# Save WireGuard config to /data/ (persists across container restarts)
+echo "$WG_CONF" > "$DATA_DIR/$WG_IFACE.conf"
+chmod 600 "$DATA_DIR/$WG_IFACE.conf"
 
-# Save credentials to /data (persists across restarts)
+# Save credentials to /data/
 mkdir -p "$DATA_DIR" && chmod 700 "$DATA_DIR"
 cat > "$CREDS_FILE" << EOF
 DEVICE_ID=$DEVICE_ID
@@ -113,14 +120,11 @@ API_BASE=$API_BASE
 EOF
 chmod 600 "$CREDS_FILE"
 
-# Also save to /ssl/ctrlable for cross-add-on access
+# Also copy to /ssl/ctrlable for cross-add-on access
 mkdir -p /ssl/ctrlable && chmod 700 /ssl/ctrlable
 cp "$CREDS_FILE" /ssl/ctrlable/ctrlable.conf
 
 info "Credentials saved"
 
-# Bring up WireGuard tunnel
 bring_up_tunnel
-
-# Start heartbeat
 run_heartbeat
