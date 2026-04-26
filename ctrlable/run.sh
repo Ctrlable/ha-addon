@@ -70,17 +70,20 @@ run_heartbeat() {
 
         # Register LAN on first successful heartbeat iteration (connectivity confirmed)
         if [ "$lan_registered" = "0" ] && [ -n "${LAN_SUBNET:-}" ]; then
-            REG=$(curl -s --max-time 10 \
+            TMPF="/tmp/ctrlable_lan_reg"
+            HTTP_CODE=$(curl -s --max-time 10 \
+                -w "%{http_code}" -o "$TMPF" \
                 -X POST "$API_BASE/devices/$DEVICE_ID/lan" \
                 -H "Content-Type: application/json" \
                 -H "X-Device-Token: $DEVICE_TOKEN" \
                 -d "{\"lan_subnet\":\"$LAN_SUBNET\",\"lan_access_enabled\":true}" \
-                2>&1) || true
-            if [ -n "$REG" ] && ! echo "$REG" | grep -q '"detail"'; then
+                2>/dev/null) || HTTP_CODE="ERR"
+            BODY=$(cat "$TMPF" 2>/dev/null); rm -f "$TMPF" 2>/dev/null || true
+            if [ "$HTTP_CODE" = "200" ]; then
                 info "LAN access registered: $LAN_SUBNET"
                 lan_registered=1
             else
-                warn "LAN registration failed: ${REG:-no response} — retrying next cycle"
+                warn "LAN registration: HTTP $HTTP_CODE body=${BODY:0:120} — retrying"
             fi
         fi
 
