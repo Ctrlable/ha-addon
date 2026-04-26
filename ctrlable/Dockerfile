@@ -6,6 +6,7 @@ RUN apk add --no-cache \
     curl \
     bash \
     iproute2 \
+    nftables \
     iptables \
     ip6tables \
     python3 \

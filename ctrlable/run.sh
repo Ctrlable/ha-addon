@@ -55,14 +55,25 @@ detect_lan_subnet() {
 setup_nat() {
     local lan_iface="$1"
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
-    # Remove stale rule if it exists, then add fresh
-    iptables -t nat -D POSTROUTING -s 10.10.0.0/16 -o "$lan_iface" -j MASQUERADE 2>/dev/null || true
-    iptables -t nat -A POSTROUTING -s 10.10.0.0/16 -o "$lan_iface" -j MASQUERADE
-    info "NAT masquerade enabled: VPN → $lan_iface"
+    if command -v nft >/dev/null 2>&1; then
+        nft add table ip ctrlnat 2>/dev/null || true
+        nft add chain ip ctrlnat postrouting \
+            '{ type nat hook postrouting priority 100; }' 2>/dev/null || true
+        nft flush chain ip ctrlnat postrouting 2>/dev/null || true
+        nft add rule ip ctrlnat postrouting \
+            ip saddr 10.10.0.0/16 oif "$lan_iface" masquerade
+        info "NAT masquerade enabled (nft): VPN → $lan_iface"
+    else
+        iptables -t nat -D POSTROUTING -s 10.10.0.0/16 -o "$lan_iface" -j MASQUERADE 2>/dev/null || true
+        iptables -t nat -A POSTROUTING -s 10.10.0.0/16 -o "$lan_iface" -j MASQUERADE \
+            || warn "iptables NAT setup failed — LAN forwarding may not work"
+        info "NAT masquerade enabled (iptables): VPN → $lan_iface"
+    fi
 }
 
 teardown_nat() {
     local lan_iface="$1"
+    nft delete table ip ctrlnat 2>/dev/null || true
     iptables -t nat -D POSTROUTING -s 10.10.0.0/16 -o "$lan_iface" -j MASQUERADE 2>/dev/null || true
 }
 
