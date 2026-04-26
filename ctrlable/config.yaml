@@ -1,5 +1,5 @@
 name: "Ctrlable Agent"
-version: "1.0.0"
+version: "1.0.1"
 slug: "ctrlable"
 description: "Connect this Home Assistant to Ctrlable remote management"
 url: "https://github.com/Ctrlable/ha-addon"
@@ -13,10 +13,9 @@ startup: services
 boot: auto
 init: false
 host_network: true
-privileged: false
-cap_add:
+privileged:
   - NET_ADMIN
-  - SYS_MODULE
+apparmor: false
 options:
   enrollment_token: ""
 schema:
