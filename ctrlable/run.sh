@@ -102,7 +102,32 @@ if [ -f "$CREDS_FILE" ]; then
     else
         info "Reconnecting existing enrollment (Device: $DEVICE_ID)"
         if [ -f "$DATA_DIR/$WG_IFACE.conf" ]; then
+            # Re-detect LAN on every startup (may have changed)
+            CURRENT_LAN_IFACE=$(detect_lan_iface)
+            CURRENT_LAN_SUBNET=""
+            if [ -n "$CURRENT_LAN_IFACE" ]; then
+                CURRENT_LAN_SUBNET=$(detect_lan_subnet "$CURRENT_LAN_IFACE")
+            fi
+            LAN_IFACE="$CURRENT_LAN_IFACE"
+            LAN_SUBNET="$CURRENT_LAN_SUBNET"
+
             bring_up_tunnel
+
+            # Register LAN subnet with portal if detected (no re-enrollment needed)
+            if [ -n "$LAN_SUBNET" ]; then
+                REG=$(curl -s --max-time 10 -X POST \
+                    "$API_BASE/devices/$DEVICE_ID/lan" \
+                    -H "Content-Type: application/json" \
+                    -H "X-Device-Token: $DEVICE_TOKEN" \
+                    -d "{\"lan_subnet\":\"$LAN_SUBNET\",\"lan_access_enabled\":true}" \
+                    2>/dev/null) || REG=""
+                if echo "$REG" | grep -q '"lan_access_enabled":true'; then
+                    info "LAN access registered: $LAN_SUBNET"
+                else
+                    warn "LAN registration failed — will retry on next restart"
+                fi
+            fi
+
             run_heartbeat
             exit 0
         else
@@ -111,7 +136,7 @@ if [ -f "$CREDS_FILE" ]; then
     fi
 fi
 
-# ── Detect LAN ────────────────────────────────────────────────────────────────
+# ── Detect LAN (first enrollment) ────────────────────────────────────────────
 LAN_IFACE=$(detect_lan_iface)
 LAN_SUBNET=""
 if [ -n "$LAN_IFACE" ]; then
