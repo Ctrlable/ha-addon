@@ -1,0 +1,28 @@
+name: "Ctrlable Agent"
+version: "1.0.0"
+slug: "ctrlable"
+description: "Connect this Home Assistant to Ctrlable remote management"
+url: "https://github.com/Ctrlable/ha-addon"
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+startup: services
+boot: auto
+init: false
+host_network: true
+privileged: false
+cap_add:
+  - NET_ADMIN
+  - SYS_MODULE
+options:
+  enrollment_token: ""
+schema:
+  enrollment_token: str
+hassio_api: true
+hassio_role: default
+map:
+  - ssl:rw
+image: "ghcr.io/ctrlable/ha-addon/{arch}"
