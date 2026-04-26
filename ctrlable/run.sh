@@ -31,9 +31,24 @@ detect_lan_iface() {
 
 detect_lan_subnet() {
     local iface="$1"
-    # The directly-connected subnet on this interface
-    ip route show dev "$iface" 2>/dev/null \
-        | awk '/proto kernel/ && /scope link/{print $1; exit}'
+    local subnet
+
+    # First try: directly-connected kernel route
+    subnet=$(ip route show dev "$iface" 2>/dev/null \
+        | awk '/proto kernel/ && /scope link/{print $1; exit}')
+
+    # Fallback: derive network from interface IP + prefix length
+    if [ -z "$subnet" ]; then
+        local addr
+        addr=$(ip -4 addr show dev "$iface" 2>/dev/null | awk '/inet /{print $2; exit}')
+        if [ -n "$addr" ]; then
+            subnet=$(python3 -c \
+                "import ipaddress; print(ipaddress.IPv4Interface('$addr').network)" \
+                2>/dev/null) || subnet=""
+        fi
+    fi
+
+    echo "$subnet"
 }
 
 # ── NAT masquerade ────────────────────────────────────────────────────────────
@@ -51,10 +66,33 @@ teardown_nat() {
     iptables -t nat -D POSTROUTING -s 10.10.0.0/16 -o "$lan_iface" -j MASQUERADE 2>/dev/null || true
 }
 
+# ── LAN registration ──────────────────────────────────────────────────────────
+# Returns 0 on success, 1 on failure. Prints result via info/warn.
+do_lan_register() {
+    [ -z "${LAN_SUBNET:-}" ] && return 1
+    local TMPF="/tmp/ctrlable_lan_reg"
+    local HTTP_CODE BODY
+    HTTP_CODE=$(curl -s --max-time 10 \
+        -w "%{http_code}" -o "$TMPF" \
+        -X POST "$API_BASE/devices/$DEVICE_ID/lan" \
+        -H "Content-Type: application/json" \
+        -H "X-Device-Token: $DEVICE_TOKEN" \
+        -d "{\"lan_subnet\":\"$LAN_SUBNET\",\"lan_access_enabled\":true}" \
+        2>/dev/null) || HTTP_CODE="ERR"
+    BODY=$(cat "$TMPF" 2>/dev/null); rm -f "$TMPF" 2>/dev/null || true
+    if [ "$HTTP_CODE" = "200" ]; then
+        info "LAN access registered: $LAN_SUBNET"
+        return 0
+    else
+        warn "LAN registration: HTTP $HTTP_CODE body=${BODY:0:120} — retrying"
+        return 1
+    fi
+}
+
 # ── Heartbeat loop ────────────────────────────────────────────────────────────
 run_heartbeat() {
     info "Starting heartbeat loop (every 60s)"
-    local lan_registered=0
+    local lan_registered="${1:-0}"
     while true; do
         RX=0; TX=0
         DUMP=$(wg show "$WG_IFACE" dump 2>/dev/null | tail -1) || true
@@ -68,23 +106,9 @@ run_heartbeat() {
             -d "{\"rx_bytes\":${RX:-0},\"tx_bytes\":${TX:-0}}" \
             >/dev/null 2>&1 || true
 
-        # Register LAN on first successful heartbeat iteration (connectivity confirmed)
+        # Retry LAN registration if the initial attempt failed
         if [ "$lan_registered" = "0" ] && [ -n "${LAN_SUBNET:-}" ]; then
-            TMPF="/tmp/ctrlable_lan_reg"
-            HTTP_CODE=$(curl -s --max-time 10 \
-                -w "%{http_code}" -o "$TMPF" \
-                -X POST "$API_BASE/devices/$DEVICE_ID/lan" \
-                -H "Content-Type: application/json" \
-                -H "X-Device-Token: $DEVICE_TOKEN" \
-                -d "{\"lan_subnet\":\"$LAN_SUBNET\",\"lan_access_enabled\":true}" \
-                2>/dev/null) || HTTP_CODE="ERR"
-            BODY=$(cat "$TMPF" 2>/dev/null); rm -f "$TMPF" 2>/dev/null || true
-            if [ "$HTTP_CODE" = "200" ]; then
-                info "LAN access registered: $LAN_SUBNET"
-                lan_registered=1
-            else
-                warn "LAN registration: HTTP $HTTP_CODE body=${BODY:0:120} — retrying"
-            fi
+            do_lan_register && lan_registered=1
         fi
 
         sleep 60
@@ -101,7 +125,6 @@ bring_up_tunnel() {
     wg-quick up "$WG_DIR/$WG_IFACE.conf"
     info "Tunnel up on $WG_IFACE ($TUNNEL_IP)"
 
-    # Set up LAN NAT if we have a LAN interface
     if [ -n "${LAN_IFACE:-}" ]; then
         setup_nat "$LAN_IFACE"
     fi
@@ -123,17 +146,21 @@ if [ -f "$CREDS_FILE" ]; then
     else
         info "Reconnecting existing enrollment (Device: $DEVICE_ID)"
         if [ -f "$DATA_DIR/$WG_IFACE.conf" ]; then
-            # Re-detect LAN on every startup (may have changed)
-            CURRENT_LAN_IFACE=$(detect_lan_iface)
-            CURRENT_LAN_SUBNET=""
-            if [ -n "$CURRENT_LAN_IFACE" ]; then
-                CURRENT_LAN_SUBNET=$(detect_lan_subnet "$CURRENT_LAN_IFACE")
+            # Re-detect LAN on every startup (interface/subnet may have changed)
+            LAN_IFACE=$(detect_lan_iface)
+            LAN_SUBNET=""
+            if [ -n "$LAN_IFACE" ]; then
+                LAN_SUBNET=$(detect_lan_subnet "$LAN_IFACE")
+                [ -n "$LAN_SUBNET" ] && info "LAN detected: $LAN_SUBNET on $LAN_IFACE"
             fi
-            LAN_IFACE="$CURRENT_LAN_IFACE"
-            LAN_SUBNET="$CURRENT_LAN_SUBNET"
 
             bring_up_tunnel
-            run_heartbeat  # LAN registration happens inside first heartbeat iteration
+
+            # Register LAN immediately; heartbeat loop will retry if this fails
+            LAN_OK=0
+            [ -n "$LAN_SUBNET" ] && do_lan_register && LAN_OK=1
+
+            run_heartbeat "$LAN_OK"
             exit 0
         else
             die "WireGuard config missing. Paste a new enrollment token in the Configuration tab and restart."
@@ -217,4 +244,9 @@ cp "$CREDS_FILE" /ssl/ctrlable/ctrlable.conf
 info "Credentials saved"
 
 bring_up_tunnel
-run_heartbeat
+
+# Register LAN immediately; heartbeat loop will retry if this fails
+LAN_OK=0
+[ -n "$LAN_SUBNET" ] && do_lan_register && LAN_OK=1
+
+run_heartbeat "$LAN_OK"
