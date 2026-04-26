@@ -115,16 +115,18 @@ if [ -f "$CREDS_FILE" ]; then
 
             # Register LAN subnet with portal if detected (no re-enrollment needed)
             if [ -n "$LAN_SUBNET" ]; then
-                REG=$(curl -s --max-time 10 -X POST \
-                    "$API_BASE/devices/$DEVICE_ID/lan" \
+                sleep 3  # let routing stabilize after wg-quick up
+                REG=$(curl -s --max-time 15 \
+                    --interface "$LAN_IFACE" \
+                    -X POST "$API_BASE/devices/$DEVICE_ID/lan" \
                     -H "Content-Type: application/json" \
                     -H "X-Device-Token: $DEVICE_TOKEN" \
                     -d "{\"lan_subnet\":\"$LAN_SUBNET\",\"lan_access_enabled\":true}" \
-                    2>/dev/null) || REG=""
+                    2>&1) || REG=""
                 if [ -n "$REG" ] && ! echo "$REG" | grep -q '"detail"'; then
                     info "LAN access registered: $LAN_SUBNET"
                 else
-                    warn "LAN registration failed (${REG:-no response}) — will retry on next restart"
+                    warn "LAN registration failed: ${REG:-no response}"
                 fi
             fi
 
