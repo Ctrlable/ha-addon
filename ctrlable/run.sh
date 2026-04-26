@@ -71,20 +71,22 @@ teardown_nat() {
 do_lan_register() {
     [ -z "${LAN_SUBNET:-}" ] && return 1
     local TMPF="/tmp/ctrlable_lan_reg"
-    local HTTP_CODE BODY
-    HTTP_CODE=$(curl -s --max-time 10 \
+    local HTTP_CODE BODY CURL_ERR
+    HTTP_CODE=$(curl -s --max-time 15 \
         -w "%{http_code}" -o "$TMPF" \
         -X POST "$API_BASE/devices/$DEVICE_ID/lan" \
         -H "Content-Type: application/json" \
         -H "X-Device-Token: $DEVICE_TOKEN" \
         -d "{\"lan_subnet\":\"$LAN_SUBNET\",\"lan_access_enabled\":true}" \
-        2>/dev/null) || HTTP_CODE="ERR"
-    BODY=$(cat "$TMPF" 2>/dev/null); rm -f "$TMPF" 2>/dev/null || true
+        2>"$TMPF.err") || HTTP_CODE="ERR"
+    BODY=$(cat "$TMPF" 2>/dev/null) || BODY=""
+    CURL_ERR=$(cat "$TMPF.err" 2>/dev/null) || CURL_ERR=""
+    rm -f "$TMPF" "$TMPF.err" 2>/dev/null || true
     if [ "$HTTP_CODE" = "200" ]; then
         info "LAN access registered: $LAN_SUBNET"
         return 0
     else
-        warn "LAN registration: HTTP $HTTP_CODE body=${BODY:0:120} — retrying"
+        warn "LAN registration: HTTP $HTTP_CODE curl_err=${CURL_ERR:0:120} body=${BODY:0:120} — retrying"
         return 1
     fi
 }
@@ -100,11 +102,14 @@ run_heartbeat() {
             RX=$(awk '{print $6}' <<< "$DUMP") || RX=0
             TX=$(awk '{print $7}' <<< "$DUMP") || TX=0
         fi
-        curl -s --max-time 10 -X POST "$API_BASE/devices/$DEVICE_ID/heartbeat" \
+        HB_CODE=$(curl -s --max-time 10 \
+            -w "%{http_code}" -o /dev/null \
+            -X POST "$API_BASE/devices/$DEVICE_ID/heartbeat" \
             -H "Content-Type: application/json" \
             -H "X-Device-Token: $DEVICE_TOKEN" \
             -d "{\"rx_bytes\":${RX:-0},\"tx_bytes\":${TX:-0}}" \
-            >/dev/null 2>&1 || true
+            2>/dev/null) || HB_CODE="ERR"
+        [ "$HB_CODE" != "200" ] && warn "Heartbeat: HTTP $HB_CODE"
 
         # Retry LAN registration if the initial attempt failed
         if [ "$lan_registered" = "0" ] && [ -n "${LAN_SUBNET:-}" ]; then
