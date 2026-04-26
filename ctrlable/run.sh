@@ -72,7 +72,7 @@ do_lan_register() {
     [ -z "${LAN_SUBNET:-}" ] && return 1
     local TMPF="/tmp/ctrlable_lan_reg"
     local HTTP_CODE BODY CURL_ERR
-    HTTP_CODE=$(curl -s --max-time 15 \
+    HTTP_CODE=$(curl -sS --max-time 15 \
         -w "%{http_code}" -o "$TMPF" \
         -X POST "$API_BASE/devices/$DEVICE_ID/lan" \
         -H "Content-Type: application/json" \
@@ -102,14 +102,19 @@ run_heartbeat() {
             RX=$(awk '{print $6}' <<< "$DUMP") || RX=0
             TX=$(awk '{print $7}' <<< "$DUMP") || TX=0
         fi
-        HB_CODE=$(curl -s --max-time 10 \
+        HB_ERRF="/tmp/ctrlable_hb_err"
+        HB_CODE=$(curl -sS --max-time 10 \
             -w "%{http_code}" -o /dev/null \
             -X POST "$API_BASE/devices/$DEVICE_ID/heartbeat" \
             -H "Content-Type: application/json" \
             -H "X-Device-Token: $DEVICE_TOKEN" \
             -d "{\"rx_bytes\":${RX:-0},\"tx_bytes\":${TX:-0}}" \
-            2>/dev/null) || HB_CODE="ERR"
-        [ "$HB_CODE" != "200" ] && warn "Heartbeat: HTTP $HB_CODE"
+            2>"$HB_ERRF") || HB_CODE="ERR"
+        if [ "$HB_CODE" != "200" ]; then
+            HB_ERR=$(cat "$HB_ERRF" 2>/dev/null) || HB_ERR=""
+            warn "Heartbeat: HTTP $HB_CODE err=${HB_ERR:0:120}"
+        fi
+        rm -f "$HB_ERRF" 2>/dev/null || true
 
         # Retry LAN registration if the initial attempt failed
         if [ "$lan_registered" = "0" ] && [ -n "${LAN_SUBNET:-}" ]; then
@@ -133,6 +138,13 @@ bring_up_tunnel() {
     if [ -n "${LAN_IFACE:-}" ]; then
         setup_nat "$LAN_IFACE"
     fi
+
+    # Connectivity probe — diagnose routing issues before first API call
+    PROBE_ERR=$(curl -sS --max-time 5 -o /dev/null \
+        -w "HTTP %{http_code}" \
+        "https://portal.ctrlable.com/" \
+        2>&1) || true
+    info "Portal probe: $PROBE_ERR"
 }
 
 # ── Read token from options ───────────────────────────────────────────────────
