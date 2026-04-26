@@ -8,7 +8,8 @@ RUN apk add --no-cache \
     iproute2 \
     iptables \
     ip6tables \
-    python3
+    python3 \
+    ca-certificates
 
 COPY run.sh /run.sh
 RUN chmod +x /run.sh

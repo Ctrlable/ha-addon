@@ -72,7 +72,7 @@ do_lan_register() {
     [ -z "${LAN_SUBNET:-}" ] && return 1
     local TMPF="/tmp/ctrlable_lan_reg"
     local HTTP_CODE BODY CURL_ERR
-    HTTP_CODE=$(curl -sS --max-time 15 \
+    HTTP_CODE=$(curl -skS --max-time 15 \
         -w "%{http_code}" -o "$TMPF" \
         -X POST "$API_BASE/devices/$DEVICE_ID/lan" \
         -H "Content-Type: application/json" \
@@ -103,7 +103,7 @@ run_heartbeat() {
             TX=$(awk '{print $7}' <<< "$DUMP") || TX=0
         fi
         HB_ERRF="/tmp/ctrlable_hb_err"
-        HB_CODE=$(curl -sS --max-time 10 \
+        HB_CODE=$(curl -skS --max-time 10 \
             -w "%{http_code}" -o /dev/null \
             -X POST "$API_BASE/devices/$DEVICE_ID/heartbeat" \
             -H "Content-Type: application/json" \
@@ -140,7 +140,7 @@ bring_up_tunnel() {
     fi
 
     # Connectivity probe — diagnose routing issues before first API call
-    PROBE_ERR=$(curl -sS --max-time 5 -o /dev/null \
+    PROBE_ERR=$(curl -skS --max-time 5 -o /dev/null \
         -w "HTTP %{http_code}" \
         "https://portal.ctrlable.com/" \
         2>&1) || true
