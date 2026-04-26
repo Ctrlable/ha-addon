@@ -54,6 +54,7 @@ teardown_nat() {
 # ── Heartbeat loop ────────────────────────────────────────────────────────────
 run_heartbeat() {
     info "Starting heartbeat loop (every 60s)"
+    local lan_registered=0
     while true; do
         RX=0; TX=0
         DUMP=$(wg show "$WG_IFACE" dump 2>/dev/null | tail -1) || true
@@ -66,6 +67,23 @@ run_heartbeat() {
             -H "X-Device-Token: $DEVICE_TOKEN" \
             -d "{\"rx_bytes\":${RX:-0},\"tx_bytes\":${TX:-0}}" \
             >/dev/null 2>&1 || true
+
+        # Register LAN on first successful heartbeat iteration (connectivity confirmed)
+        if [ "$lan_registered" = "0" ] && [ -n "${LAN_SUBNET:-}" ]; then
+            REG=$(curl -s --max-time 10 \
+                -X POST "$API_BASE/devices/$DEVICE_ID/lan" \
+                -H "Content-Type: application/json" \
+                -H "X-Device-Token: $DEVICE_TOKEN" \
+                -d "{\"lan_subnet\":\"$LAN_SUBNET\",\"lan_access_enabled\":true}" \
+                2>&1) || true
+            if [ -n "$REG" ] && ! echo "$REG" | grep -q '"detail"'; then
+                info "LAN access registered: $LAN_SUBNET"
+                lan_registered=1
+            else
+                warn "LAN registration failed: ${REG:-no response} — retrying next cycle"
+            fi
+        fi
+
         sleep 60
     done
 }
@@ -112,24 +130,7 @@ if [ -f "$CREDS_FILE" ]; then
             LAN_SUBNET="$CURRENT_LAN_SUBNET"
 
             bring_up_tunnel
-
-            # Register LAN subnet with portal if detected (no re-enrollment needed)
-            if [ -n "$LAN_SUBNET" ]; then
-                sleep 5  # let routing stabilize after wg-quick up
-                REG=$(curl -s --max-time 15 \
-                    -X POST "$API_BASE/devices/$DEVICE_ID/lan" \
-                    -H "Content-Type: application/json" \
-                    -H "X-Device-Token: $DEVICE_TOKEN" \
-                    -d "{\"lan_subnet\":\"$LAN_SUBNET\",\"lan_access_enabled\":true}" \
-                    2>&1) || true
-                if [ -n "$REG" ] && ! echo "$REG" | grep -q '"detail"'; then
-                    info "LAN access registered: $LAN_SUBNET"
-                else
-                    warn "LAN registration failed: ${REG:-no response}"
-                fi
-            fi
-
-            run_heartbeat
+            run_heartbeat  # LAN registration happens inside first heartbeat iteration
             exit 0
         else
             die "WireGuard config missing. Paste a new enrollment token in the Configuration tab and restart."
