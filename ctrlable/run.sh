@@ -62,7 +62,7 @@ if [ -f "$CREDS_FILE" ]; then
 fi
 
 # ── First run — enroll ────────────────────────────────────────────────────────
-ENROLLMENT_TOKEN=$(bashio::config 'enrollment_token' 2>/dev/null) || ENROLLMENT_TOKEN=""
+ENROLLMENT_TOKEN=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('enrollment_token',''))" 2>/dev/null) || ENROLLMENT_TOKEN=""
 [ -z "$ENROLLMENT_TOKEN" ] && die "enrollment_token is not set. Open the add-on Configuration tab and paste your token."
 
 info "Enrolling with Ctrlable..."
