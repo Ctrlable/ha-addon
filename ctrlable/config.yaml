@@ -1,5 +1,5 @@
 name: "Ctrlable Agent"
-version: "1.0.1"
+version: "1.0.2"
 slug: "ctrlable"
 description: "Connect this Home Assistant to Ctrlable remote management"
 url: "https://github.com/Ctrlable/ha-addon"
@@ -24,4 +24,3 @@ hassio_api: true
 hassio_role: default
 map:
   - ssl:rw
-image: "ghcr.io/ctrlable/ha-addon/{arch}"
