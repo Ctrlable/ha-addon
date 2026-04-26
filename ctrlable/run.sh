@@ -47,7 +47,6 @@ run_heartbeat() {
 bring_up_tunnel() {
     local conf_src="$DATA_DIR/$WG_IFACE.conf"
     mkdir -p "$WG_DIR" && chmod 700 "$WG_DIR"
-    # Copy from persistent /data/ to /etc/wireguard/ each startup
     cp "$conf_src" "$WG_DIR/$WG_IFACE.conf"
     chmod 600 "$WG_DIR/$WG_IFACE.conf"
     wg-quick down "$WG_IFACE" 2>/dev/null || true
@@ -55,23 +54,33 @@ bring_up_tunnel() {
     info "Tunnel up on $WG_IFACE ($TUNNEL_IP)"
 }
 
-# ── Already enrolled — reconnect ──────────────────────────────────────────────
+# ── Read token from options ───────────────────────────────────────────────────
+ENROLLMENT_TOKEN=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('enrollment_token',''))" 2>/dev/null) || ENROLLMENT_TOKEN=""
+
+# ── Check if already enrolled ────────────────────────────────────────────────
 if [ -f "$CREDS_FILE" ]; then
-    info "Found existing enrollment — reconnecting"
-    # shellcheck source=/dev/null
     source "$CREDS_FILE"
-    if [ -f "$DATA_DIR/$WG_IFACE.conf" ]; then
-        bring_up_tunnel
-        run_heartbeat
-        exit 0
+
+    # If a new (different) token is set, wipe stored state and re-enroll
+    if [ -n "$ENROLLMENT_TOKEN" ] && [ "$ENROLLMENT_TOKEN" != "${USED_TOKEN:-}" ]; then
+        info "New enrollment token detected — clearing previous enrollment"
+        wg-quick down "$WG_IFACE" 2>/dev/null || true
+        rm -f "$CREDS_FILE" "$DATA_DIR/$WG_IFACE.conf" "$WG_DIR/$WG_IFACE.conf"
+        unset DEVICE_ID DEVICE_TOKEN TUNNEL_IP WG_IFACE
     else
-        warn "WireGuard config missing from /data/ — cannot reconnect without re-enrolling"
-        die "Delete this add-on, reinstall it, and paste a new enrollment token."
+        # Same token (or no token) — reconnect existing tunnel
+        info "Reconnecting existing enrollment (Device: $DEVICE_ID)"
+        if [ -f "$DATA_DIR/$WG_IFACE.conf" ]; then
+            bring_up_tunnel
+            run_heartbeat
+            exit 0
+        else
+            die "WireGuard config missing. Paste a new enrollment token in the Configuration tab and restart."
+        fi
     fi
 fi
 
-# ── First run — enroll ────────────────────────────────────────────────────────
-ENROLLMENT_TOKEN=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('enrollment_token',''))" 2>/dev/null) || ENROLLMENT_TOKEN=""
+# ── Enroll ────────────────────────────────────────────────────────────────────
 [ -z "$ENROLLMENT_TOKEN" ] && die "enrollment_token is not set. Open the add-on Configuration tab and paste your token."
 
 info "Enrolling with Ctrlable..."
@@ -109,7 +118,7 @@ WG_CONF=$(b64decode <<< "$WG_B64")
 echo "$WG_CONF" > "$DATA_DIR/$WG_IFACE.conf"
 chmod 600 "$DATA_DIR/$WG_IFACE.conf"
 
-# Save credentials to /data/
+# Save credentials — store the used token so a new one triggers re-enrollment
 mkdir -p "$DATA_DIR" && chmod 700 "$DATA_DIR"
 cat > "$CREDS_FILE" << EOF
 DEVICE_ID=$DEVICE_ID
@@ -117,10 +126,10 @@ DEVICE_TOKEN=$DEVICE_TOKEN
 TUNNEL_IP=$TUNNEL_IP
 WG_IFACE=$WG_IFACE
 API_BASE=$API_BASE
+USED_TOKEN=$ENROLLMENT_TOKEN
 EOF
 chmod 600 "$CREDS_FILE"
 
-# Also copy to /ssl/ctrlable for cross-add-on access
 mkdir -p /ssl/ctrlable && chmod 700 /ssl/ctrlable
 cp "$CREDS_FILE" /ssl/ctrlable/ctrlable.conf
 
