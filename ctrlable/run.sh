@@ -56,21 +56,16 @@ setup_nat() {
     local lan_iface="$1"
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
     if command -v nft >/dev/null 2>&1; then
-        # FORWARD: insert into DOCKER-USER so rules run before HAOS policy drop
-        # Remove any stale ctrlable rules first
-        nft -a list chain ip filter DOCKER-USER 2>/dev/null \
-            | awk '/ctrlable/{print $NF}' \
-            | while read -r h; do
-                nft delete rule ip filter DOCKER-USER handle "$h" 2>/dev/null || true
-              done
-        nft insert rule ip filter DOCKER-USER \
-            comment \"ctrlable\" \
-            ip daddr 10.10.0.0/16 iif "$lan_iface" ct state related,established accept \
-            2>/dev/null || true
-        nft insert rule ip filter DOCKER-USER \
-            comment \"ctrlable\" \
+        # FORWARD: add to DOCKER-USER (jumped from FORWARD before its policy drop).
+        # accept in a non-base chain is terminal — bypasses the base chain's policy drop.
+        # DOCKER-USER is intentionally empty on HAOS; flush is safe and avoids stale rules.
+        nft flush chain ip filter DOCKER-USER 2>/dev/null || true
+        nft add rule ip filter DOCKER-USER \
             ip saddr 10.10.0.0/16 oif "$lan_iface" accept \
-            2>/dev/null || true
+            2>/dev/null || warn "Could not insert DOCKER-USER outbound rule"
+        nft add rule ip filter DOCKER-USER \
+            ip daddr 10.10.0.0/16 iif "$lan_iface" ct state related,established accept \
+            2>/dev/null || warn "Could not insert DOCKER-USER inbound rule"
         # POSTROUTING: masquerade VPN source IPs going to LAN
         nft add table ip ctrlnat 2>/dev/null || true
         nft add chain ip ctrlnat postrouting \
@@ -89,6 +84,7 @@ setup_nat() {
 
 teardown_nat() {
     local lan_iface="$1"
+    nft flush chain ip filter DOCKER-USER 2>/dev/null || true
     nft delete table ip ctrlnat 2>/dev/null || true
     iptables -t nat -D POSTROUTING -s 10.10.0.0/16 -o "$lan_iface" -j MASQUERADE 2>/dev/null || true
 }
