@@ -157,7 +157,7 @@ bring_up_tunnel() {
     wg-quick down "$WG_IFACE" 2>/dev/null || true
     # HAOS manages its own DNS resolver; strip the DNS line so wg-quick never
     # calls resolvconf (which conflicts with HAOS and breaks DNS resolution).
-    sed -i '/^[[:space:]]*DNS[[:space:]]*=/Id' "$WG_DIR/$WG_IFACE.conf"
+    sed -i '/^[[:space:]]*DNS[[:space:]]*=/d' "$WG_DIR/$WG_IFACE.conf"
     wg-quick up "$WG_DIR/$WG_IFACE.conf"
     info "Tunnel up on $WG_IFACE ($TUNNEL_IP)"
 
