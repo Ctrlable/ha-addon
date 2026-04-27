@@ -56,18 +56,25 @@ setup_nat() {
     local lan_iface="$1"
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
     if command -v nft >/dev/null 2>&1; then
-        nft add table ip ctrlnat 2>/dev/null || true
-        # FORWARD: allow VPN ↔ LAN in both directions
-        nft add chain ip ctrlnat forward \
-            '{ type filter hook forward priority 0; }' 2>/dev/null || true
-        nft flush chain ip ctrlnat forward 2>/dev/null || true
-        nft add rule ip ctrlnat forward \
-            ip saddr 10.10.0.0/16 oif "$lan_iface" accept
-        nft add rule ip ctrlnat forward \
-            ip daddr 10.10.0.0/16 iif "$lan_iface" ct state related,established accept
+        # FORWARD: insert into DOCKER-USER so rules run before HAOS policy drop
+        # Remove any stale ctrlable rules first
+        nft -a list chain ip filter DOCKER-USER 2>/dev/null \
+            | awk '/ctrlable/{print $NF}' \
+            | while read -r h; do
+                nft delete rule ip filter DOCKER-USER handle "$h" 2>/dev/null || true
+              done
+        nft insert rule ip filter DOCKER-USER \
+            comment \"ctrlable\" \
+            ip daddr 10.10.0.0/16 iif "$lan_iface" ct state related,established accept \
+            2>/dev/null || true
+        nft insert rule ip filter DOCKER-USER \
+            comment \"ctrlable\" \
+            ip saddr 10.10.0.0/16 oif "$lan_iface" accept \
+            2>/dev/null || true
         # POSTROUTING: masquerade VPN source IPs going to LAN
+        nft add table ip ctrlnat 2>/dev/null || true
         nft add chain ip ctrlnat postrouting \
-            '{ type nat hook postrouting priority 100; }' 2>/dev/null || true
+            '{ type nat hook postrouting priority srcnat; }' 2>/dev/null || true
         nft flush chain ip ctrlnat postrouting 2>/dev/null || true
         nft add rule ip ctrlnat postrouting \
             ip saddr 10.10.0.0/16 oif "$lan_iface" masquerade
