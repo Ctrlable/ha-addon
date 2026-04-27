@@ -155,10 +155,9 @@ bring_up_tunnel() {
     cp "$conf_src" "$WG_DIR/$WG_IFACE.conf"
     chmod 600 "$WG_DIR/$WG_IFACE.conf"
     wg-quick down "$WG_IFACE" 2>/dev/null || true
-    # HAOS manages /etc/resolv.conf directly (not via resolvconf), so the
-    # resolvconf signature is always stale. Re-sync it before wg-quick tries
-    # to call resolvconf -a, otherwise wg-quick tears down the interface.
-    resolvconf -u 2>/dev/null || true
+    # HAOS manages its own DNS resolver; strip the DNS line so wg-quick never
+    # calls resolvconf (which conflicts with HAOS and breaks DNS resolution).
+    sed -i '/^[[:space:]]*DNS[[:space:]]*=/Id' "$WG_DIR/$WG_IFACE.conf"
     wg-quick up "$WG_DIR/$WG_IFACE.conf"
     info "Tunnel up on $WG_IFACE ($TUNNEL_IP)"
 
