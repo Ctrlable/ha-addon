@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
+ADDON_VERSION="5"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
@@ -114,6 +115,26 @@ do_lan_register() {
     fi
 }
 
+# ── LAN candidate discovery (all directly-connected subnets, excluding WG/lo) ──
+detect_all_lan_subnets_json() {
+    local routes candidates="" first=1 out='['
+    routes=$(ip -4 route show scope link 2>/dev/null) || \
+        routes=$(ip route show scope link 2>/dev/null) || routes=""
+    while IFS= read -r line; do
+        subnet=$(echo "$line" | awk '{print $1}')
+        iface=$(echo "$line" | grep -o 'dev [^ ]*' | awk '{print $2}')
+        { [ -z "$subnet" ] || [ -z "$iface" ]; } && continue
+        echo "$iface" | grep -qE '^(lo|wg)' && continue
+        echo "$subnet" | grep -q '/' || continue
+        echo "$subnet" | grep -q '^127\.' && continue
+        case ",$candidates," in *,"$subnet",*) continue ;; esac
+        candidates="${candidates:+$candidates,}$subnet"
+        [ "$first" = "1" ] && first=0 || out="${out},"
+        out="${out}\"${subnet}\""
+    done <<< "$routes"
+    printf '%s]' "$out"
+}
+
 # ── Heartbeat loop ────────────────────────────────────────────────────────────
 run_heartbeat() {
     info "Starting heartbeat loop (every 60s)"
@@ -125,13 +146,16 @@ run_heartbeat() {
             RX=$(awk '{print $6}' <<< "$DUMP") || RX=0
             TX=$(awk '{print $7}' <<< "$DUMP") || TX=0
         fi
+
+        LAN_JSON=$(detect_all_lan_subnets_json)
+
         HB_ERRF="/tmp/ctrlable_hb_err"
         HB_CODE=$(curl -skS --max-time 10 \
             -w "%{http_code}" -o /dev/null \
             -X POST "$API_BASE/devices/$DEVICE_ID/heartbeat" \
             -H "Content-Type: application/json" \
             -H "X-Device-Token: $DEVICE_TOKEN" \
-            -d "{\"rx_bytes\":${RX:-0},\"tx_bytes\":${TX:-0}}" \
+            -d "{\"rx_bytes\":${RX:-0},\"tx_bytes\":${TX:-0},\"agent_version\":\"${ADDON_VERSION}\",\"lan_candidates\":${LAN_JSON}}" \
             2>"$HB_ERRF") || HB_CODE="ERR"
         if [ "$HB_CODE" != "200" ]; then
             HB_ERR=$(cat "$HB_ERRF" 2>/dev/null) || HB_ERR=""
