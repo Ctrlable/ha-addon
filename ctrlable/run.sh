@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-ADDON_VERSION="5"
+ADDON_VERSION="6"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
@@ -172,6 +172,24 @@ detect_all_lan_subnets_json() {
     printf '%s]' "$out"
 }
 
+# ── Supervisor API self-update (HAOS only) ────────────────────────────────────
+supervisor_self_update() {
+    local token="${SUPERVISOR_TOKEN:-}"
+    [ -z "$token" ] && return 1
+    local code
+    code=$(curl -sSL --max-time 30 \
+        -w "%{http_code}" -o /dev/null \
+        -X POST "http://supervisor/addons/self/update" \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" 2>/dev/null) || code="ERR"
+    if [ "$code" = "200" ]; then
+        info "Self-update triggered via Supervisor API — addon will restart"
+        return 0
+    fi
+    warn "Supervisor self-update failed: HTTP $code"
+    return 1
+}
+
 # ── Heartbeat loop ────────────────────────────────────────────────────────────
 run_heartbeat() {
     info "Starting heartbeat loop (every 60s)"
@@ -196,6 +214,14 @@ run_heartbeat() {
             2>"$HB_TMPF.err") || HB_CODE="ERR"
         if [ "$HB_CODE" = "200" ]; then
             HB_BODY=$(cat "$HB_TMPF" 2>/dev/null | tr -d ' \t') || HB_BODY=""
+
+            # Handle server-side commands
+            HB_CMD=$(printf '%s' "$HB_BODY" | grep -o '"command":"[^"]*"' | cut -d'"' -f4) || HB_CMD=""
+            if [ "$HB_CMD" = "self_update" ]; then
+                info "Server requested self-update"
+                supervisor_self_update || true
+            fi
+
             # Apply NETMAP if server returned a proxy_subnet we haven't set up yet
             HB_PROXY=$(printf '%s' "$HB_BODY" | grep -o '"proxy_subnet":"[^"]*"' | cut -d'"' -f4) || HB_PROXY=""
             HB_LAN=$(printf '%s' "$HB_BODY" | grep -o '"lan_subnet":"[^"]*"' | cut -d'"' -f4) || HB_LAN=""
