@@ -200,8 +200,9 @@ run_heartbeat() {
             HB_PROXY=$(printf '%s' "$HB_BODY" | grep -o '"proxy_subnet":"[^"]*"' | cut -d'"' -f4) || HB_PROXY=""
             HB_LAN=$(printf '%s' "$HB_BODY" | grep -o '"lan_subnet":"[^"]*"' | cut -d'"' -f4) || HB_LAN=""
             if [ -n "$HB_PROXY" ] && [ -n "$HB_LAN" ] && [ -n "${WG_IFACE:-}" ]; then
-                # Only add rule if not already present
-                if ! nft list chain ip ctrlnat prerouting 2>/dev/null | grep -q "$HB_PROXY" && \
+                # Recreate if missing or if old non-conntrack form (ip daddr set) is in place
+                _PROXY_BASE="${HB_PROXY%/*}"
+                if ! nft list chain ip ctrlnat prerouting 2>/dev/null | grep -q "dnat.*$_PROXY_BASE" && \
                    ! iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "$HB_PROXY"; then
                     setup_netmap "$HB_PROXY" "$HB_LAN" "$WG_IFACE"
                 fi
