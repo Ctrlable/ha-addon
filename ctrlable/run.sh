@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-ADDON_VERSION="7"
+ADDON_VERSION="8"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
@@ -253,20 +253,11 @@ scan_lan() {
         > /dev/null 2>&1 || true
 }
 
-run_scan_loop() {
-    info "Starting LAN scan loop (every 5 min)"
-    # Stagger first scan by 30s to let tunnel stabilise
-    sleep 30
-    while true; do
-        scan_lan || true
-        sleep 300
-    done
-}
-
 # ── Heartbeat loop ────────────────────────────────────────────────────────────
 run_heartbeat() {
-    info "Starting heartbeat loop (every 60s)"
+    info "Starting heartbeat loop (every 60s, LAN scan every 5 min)"
     local lan_registered="${1:-0}"
+    local hb_count=0
     while true; do
         RX=0; TX=0
         DUMP=$(wg show "$WG_IFACE" dump 2>/dev/null | tail -1) || true
@@ -319,6 +310,12 @@ run_heartbeat() {
         # Retry LAN registration if the initial attempt failed
         if [ "$lan_registered" = "0" ] && [ -n "${LAN_SUBNET:-}" ]; then
             do_lan_register && lan_registered=1
+        fi
+
+        # LAN scan every 5th heartbeat (~5 min); first scan on iteration 1 (after 60s)
+        hb_count=$(( hb_count + 1 ))
+        if [ $(( hb_count % 5 )) -eq 1 ]; then
+            scan_lan || true
         fi
 
         sleep 60
@@ -469,5 +466,4 @@ bring_up_tunnel
 LAN_OK=0
 [ -n "$LAN_SUBNET" ] && do_lan_register && LAN_OK=1
 
-run_scan_loop &
 run_heartbeat "$LAN_OK"
