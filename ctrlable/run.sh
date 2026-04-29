@@ -57,18 +57,19 @@ setup_nat() {
     local lan_iface="$1"
     sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
     if command -v nft >/dev/null 2>&1; then
-        # FORWARD: add to DOCKER-USER (jumped from FORWARD before its policy drop).
-        # accept in a non-base chain is terminal — bypasses the base chain's policy drop.
-        # DOCKER-USER is intentionally empty on HAOS; flush is safe and avoids stale rules.
-        nft flush chain ip filter DOCKER-USER 2>/dev/null || true
-        nft add rule ip filter DOCKER-USER \
-            ip saddr 10.10.0.0/16 oif "$lan_iface" accept \
-            2>/dev/null || warn "Could not insert DOCKER-USER outbound rule"
-        nft add rule ip filter DOCKER-USER \
-            ip daddr 10.10.0.0/16 iif "$lan_iface" ct state related,established accept \
-            2>/dev/null || warn "Could not insert DOCKER-USER inbound rule"
-        # POSTROUTING: masquerade VPN source IPs going to LAN
         nft add table ip ctrlnat 2>/dev/null || true
+
+        # FORWARD: own chain in ctrlnat — does not depend on DOCKER-USER
+        nft add chain ip ctrlnat forward \
+            '{ type filter hook forward priority filter; }' 2>/dev/null || true
+        nft flush chain ip ctrlnat forward 2>/dev/null || true
+        nft add rule ip ctrlnat forward \
+            iifname "$WG_IFACE" oifname "$lan_iface" accept 2>/dev/null || true
+        nft add rule ip ctrlnat forward \
+            iifname "$lan_iface" oifname "$WG_IFACE" ct state related,established accept \
+            2>/dev/null || true
+
+        # POSTROUTING: masquerade VPN source IPs going to LAN
         nft add chain ip ctrlnat postrouting \
             '{ type nat hook postrouting priority srcnat; }' 2>/dev/null || true
         nft flush chain ip ctrlnat postrouting 2>/dev/null || true
