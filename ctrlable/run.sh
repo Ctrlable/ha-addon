@@ -106,7 +106,7 @@ setup_netmap() {
         nft flush chain ip ctrlnat prerouting 2>/dev/null || true
         if nft add rule ip ctrlnat prerouting \
             iifname "\"$iface\"" ip daddr "$proxy" \
-            ip daddr set ip daddr and 0x000000ff or "$lan_hex" 2>/dev/null; then
+            dnat ip to ip daddr and 0x000000ff or "$lan_hex" 2>/dev/null; then
             info "Proxy NETMAP: $proxy → $lan (nft)"
             return 0
         fi
