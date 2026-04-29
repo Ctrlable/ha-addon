@@ -90,6 +90,36 @@ teardown_nat() {
     iptables -t nat -D POSTROUTING -s 10.10.0.0/16 -o "$lan_iface" -j MASQUERADE 2>/dev/null || true
 }
 
+# ── Proxy NETMAP (prerouting: proxy_subnet → real LAN subnet) ─────────────────
+setup_netmap() {
+    local proxy="$1" lan="$2" iface="$3"
+    if command -v nft >/dev/null 2>&1; then
+        local a b c lan_hex
+        a=$(printf '%s' "$lan" | cut -d. -f1)
+        b=$(printf '%s' "$lan" | cut -d. -f2)
+        c=$(printf '%s' "$lan" | cut -d. -f3)
+        lan_hex=$(printf "0x%02x%02x%02x00" "$a" "$b" "$c")
+        nft add table ip ctrlnat 2>/dev/null || true
+        nft add chain ip ctrlnat prerouting \
+            '{ type nat hook prerouting priority dstnat; }' 2>/dev/null || true
+        nft flush chain ip ctrlnat prerouting 2>/dev/null || true
+        if nft add rule ip ctrlnat prerouting \
+            iifname "\"$iface\"" ip daddr "$proxy" \
+            ip daddr set ip daddr and 0x000000ff or "$lan_hex" 2>/dev/null; then
+            info "Proxy NETMAP: $proxy → $lan (nft)"
+            return 0
+        fi
+    fi
+    if iptables -t nat -L PREROUTING -n >/dev/null 2>&1; then
+        iptables -t nat -D PREROUTING -i "$iface" -d "$proxy" -j NETMAP --to "$lan" 2>/dev/null || true
+        if iptables -t nat -A PREROUTING -i "$iface" -d "$proxy" -j NETMAP --to "$lan" 2>/dev/null; then
+            info "Proxy NETMAP: $proxy → $lan (iptables)"
+            return 0
+        fi
+    fi
+    warn "Proxy NETMAP setup failed — overlapping subnets may not route correctly"
+}
+
 # ── LAN registration ──────────────────────────────────────────────────────────
 # Returns 0 on success, 1 on failure. Prints result via info/warn.
 do_lan_register() {
@@ -108,6 +138,12 @@ do_lan_register() {
     rm -f "$TMPF" "$TMPF.err" 2>/dev/null || true
     if [ "$HTTP_CODE" = "200" ]; then
         info "LAN access registered: $LAN_SUBNET"
+        # Apply proxy NETMAP rules if server assigned a proxy subnet
+        local PROXY_SUBNET
+        PROXY_SUBNET=$(printf '%s' "$BODY" | tr -d ' \t' | grep -o '"proxy_subnet":"[^"]*"' | cut -d'"' -f4) || PROXY_SUBNET=""
+        if [ -n "$PROXY_SUBNET" ] && [ -n "${WG_IFACE:-}" ]; then
+            setup_netmap "$PROXY_SUBNET" "$LAN_SUBNET" "$WG_IFACE"
+        fi
         return 0
     else
         warn "LAN registration: HTTP $HTTP_CODE curl_err=${CURL_ERR:0:120} body=${BODY:0:120} — retrying"
@@ -149,19 +185,31 @@ run_heartbeat() {
 
         LAN_JSON=$(detect_all_lan_subnets_json)
 
-        HB_ERRF="/tmp/ctrlable_hb_err"
+        HB_TMPF="/tmp/ctrlable_hb"
         HB_CODE=$(curl -skS --max-time 10 \
-            -w "%{http_code}" -o /dev/null \
+            -w "%{http_code}" -o "$HB_TMPF" \
             -X POST "$API_BASE/devices/$DEVICE_ID/heartbeat" \
             -H "Content-Type: application/json" \
             -H "X-Device-Token: $DEVICE_TOKEN" \
             -d "{\"rx_bytes\":${RX:-0},\"tx_bytes\":${TX:-0},\"agent_version\":\"${ADDON_VERSION}\",\"lan_candidates\":${LAN_JSON}}" \
-            2>"$HB_ERRF") || HB_CODE="ERR"
-        if [ "$HB_CODE" != "200" ]; then
-            HB_ERR=$(cat "$HB_ERRF" 2>/dev/null) || HB_ERR=""
+            2>"$HB_TMPF.err") || HB_CODE="ERR"
+        if [ "$HB_CODE" = "200" ]; then
+            HB_BODY=$(cat "$HB_TMPF" 2>/dev/null | tr -d ' \t') || HB_BODY=""
+            # Apply NETMAP if server returned a proxy_subnet we haven't set up yet
+            HB_PROXY=$(printf '%s' "$HB_BODY" | grep -o '"proxy_subnet":"[^"]*"' | cut -d'"' -f4) || HB_PROXY=""
+            HB_LAN=$(printf '%s' "$HB_BODY" | grep -o '"lan_subnet":"[^"]*"' | cut -d'"' -f4) || HB_LAN=""
+            if [ -n "$HB_PROXY" ] && [ -n "$HB_LAN" ] && [ -n "${WG_IFACE:-}" ]; then
+                # Only add rule if not already present
+                if ! nft list chain ip ctrlnat prerouting 2>/dev/null | grep -q "$HB_PROXY" && \
+                   ! iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "$HB_PROXY"; then
+                    setup_netmap "$HB_PROXY" "$HB_LAN" "$WG_IFACE"
+                fi
+            fi
+        else
+            HB_ERR=$(cat "$HB_TMPF.err" 2>/dev/null) || HB_ERR=""
             warn "Heartbeat: HTTP $HB_CODE err=${HB_ERR:0:120}"
         fi
-        rm -f "$HB_ERRF" 2>/dev/null || true
+        rm -f "$HB_TMPF" "$HB_TMPF.err" 2>/dev/null || true
 
         # Retry LAN registration if the initial attempt failed
         if [ "$lan_registered" = "0" ] && [ -n "${LAN_SUBNET:-}" ]; then
