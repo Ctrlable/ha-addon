@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-ADDON_VERSION="6"
+ADDON_VERSION="7"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
@@ -190,6 +190,79 @@ supervisor_self_update() {
     return 1
 }
 
+# ── LAN scanner ───────────────────────────────────────────────────────────────
+# Reads ARP table, probes each live host for open ports, POSTs results to server.
+SCAN_PORTS_CSV="22,23,80,443,554,1883,3000,4200,5000,7080,8080,8123,8443,8888,9090,9443"
+
+scan_lan() {
+    [ -z "${DEVICE_TOKEN:-}" ] || [ -z "${DEVICE_ID:-}" ] && return 0
+
+    # Build JSON array of discovered devices from ARP table
+    local devices_json=""
+    while IFS= read -r line; do
+        local ip mac
+        ip=$(printf '%s' "$line" | awk '{print $1}')
+        mac=$(printf '%s' "$line" | awk '{print $4}')
+        # Skip header, incomplete entries, and the loopback/WG tunnel range
+        [ "$ip" = "IP" ] && continue
+        [ "$mac" = "00:00:00:00:00:00" ] && continue
+        [ -z "$ip" ] || [ -z "$mac" ] && continue
+        printf '%s' "$ip" | grep -qE '^10\.10\.' && continue
+
+        # Probe ports in parallel (background nc jobs)
+        local open_ports=""
+        local pids=""
+        local tmpdir
+        tmpdir=$(mktemp -d /tmp/ctrlscan_XXXXXX)
+        for port in $(printf '%s' "$SCAN_PORTS_CSV" | tr ',' ' '); do
+            (
+                nc -z -w1 "$ip" "$port" 2>/dev/null && printf '%s' "$port" > "$tmpdir/$port"
+            ) &
+            pids="$pids $!"
+        done
+        # Wait for all probes (max 3s guard)
+        for pid in $pids; do wait "$pid" 2>/dev/null || true; done
+
+        local ports_arr="["
+        local pfirst=1
+        for f in "$tmpdir"/*; do
+            [ -f "$f" ] || continue
+            local p; p=$(cat "$f")
+            [ "$pfirst" = "1" ] && pfirst=0 || ports_arr="${ports_arr},"
+            ports_arr="${ports_arr}${p}"
+        done
+        ports_arr="${ports_arr}]"
+        rm -rf "$tmpdir"
+
+        # Sanitize hostname (avoid breaking JSON)
+        local hn
+        hn=$(getent hosts "$ip" 2>/dev/null | awk '{print $2}' | head -1 | tr -d '"\\') || hn=""
+        mac_clean=$(printf '%s' "$mac" | tr -d '"\\')
+
+        [ -n "$devices_json" ] && devices_json="${devices_json},"
+        devices_json="${devices_json}{\"ip_address\":\"${ip}\",\"mac_address\":\"${mac_clean}\",\"hostname\":\"${hn}\",\"open_ports\":${ports_arr}}"
+    done < /proc/net/arp
+
+    [ -z "$devices_json" ] && return 0
+
+    curl -sk --max-time 30 \
+        -X POST "$API_BASE/discovery/report" \
+        -H "Content-Type: application/json" \
+        -H "X-Device-Token: $DEVICE_TOKEN" \
+        -d "{\"scan_type\":\"arp_nc\",\"devices\":[${devices_json}]}" \
+        > /dev/null 2>&1 || true
+}
+
+run_scan_loop() {
+    info "Starting LAN scan loop (every 5 min)"
+    # Stagger first scan by 30s to let tunnel stabilise
+    sleep 30
+    while true; do
+        scan_lan || true
+        sleep 300
+    done
+}
+
 # ── Heartbeat loop ────────────────────────────────────────────────────────────
 run_heartbeat() {
     info "Starting heartbeat loop (every 60s)"
@@ -221,6 +294,10 @@ run_heartbeat() {
                 info "Server requested self-update"
                 supervisor_self_update || true
             fi
+
+            # Update scan ports if server sent a new list
+            HB_PORTS=$(printf '%s' "$HB_BODY" | grep -o '"scan_ports":\[[^]]*\]' | sed 's/"scan_ports"://' | tr -d '[]" ') || HB_PORTS=""
+            [ -n "$HB_PORTS" ] && SCAN_PORTS_CSV="$HB_PORTS"
 
             # Apply NETMAP if server returned a proxy_subnet we haven't set up yet
             HB_PROXY=$(printf '%s' "$HB_BODY" | grep -o '"proxy_subnet":"[^"]*"' | cut -d'"' -f4) || HB_PROXY=""
@@ -392,4 +469,5 @@ bring_up_tunnel
 LAN_OK=0
 [ -n "$LAN_SUBNET" ] && do_lan_register && LAN_OK=1
 
+run_scan_loop &
 run_heartbeat "$LAN_OK"
