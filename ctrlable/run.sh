@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-ADDON_VERSION="9"
+ADDON_VERSION="10"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
@@ -82,13 +82,43 @@ setup_nat() {
             || warn "iptables NAT setup failed — LAN forwarding may not work"
         info "NAT masquerade enabled (iptables): VPN → $lan_iface"
     fi
+
+    # iptables FORWARD rules — Docker sets FORWARD policy DROP via iptables which
+    # silently overrides nft ACCEPT.  Insert into DOCKER-USER when it exists (the
+    # correct hook for custom per-container / host forward policy), otherwise fall
+    # back to the raw FORWARD chain.
+    if command -v iptables >/dev/null 2>&1; then
+        local fwd_chain="FORWARD"
+        if iptables -L DOCKER-USER -n >/dev/null 2>&1; then
+            fwd_chain="DOCKER-USER"
+        fi
+        iptables -D "$fwd_chain" -i "$WG_IFACE" -o "$lan_iface" -j ACCEPT 2>/dev/null || true
+        iptables -I "$fwd_chain" 1 -i "$WG_IFACE" -o "$lan_iface" -j ACCEPT \
+            || warn "iptables $fwd_chain WG→LAN rule failed"
+        iptables -D "$fwd_chain" -i "$lan_iface" -o "$WG_IFACE" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+        iptables -I "$fwd_chain" 2 -i "$lan_iface" -o "$WG_IFACE" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT \
+            || warn "iptables $fwd_chain LAN→WG established rule failed"
+        # Allow inbound WG packets into the host (INPUT) so direct tunnel access works
+        iptables -D INPUT -i "$WG_IFACE" -j ACCEPT 2>/dev/null || true
+        iptables -I INPUT 1 -i "$WG_IFACE" -j ACCEPT \
+            || warn "iptables INPUT WG accept rule failed"
+        info "iptables FORWARD ($fwd_chain) + INPUT rules set for $WG_IFACE ↔ $lan_iface"
+    fi
 }
 
 teardown_nat() {
     local lan_iface="$1"
-    nft flush chain ip filter DOCKER-USER 2>/dev/null || true
     nft delete table ip ctrlnat 2>/dev/null || true
     iptables -t nat -D POSTROUTING -s 10.10.0.0/16 -o "$lan_iface" -j MASQUERADE 2>/dev/null || true
+    if command -v iptables >/dev/null 2>&1; then
+        local fwd_chain="FORWARD"
+        if iptables -L DOCKER-USER -n >/dev/null 2>&1; then
+            fwd_chain="DOCKER-USER"
+        fi
+        iptables -D "$fwd_chain" -i "$WG_IFACE" -o "$lan_iface" -j ACCEPT 2>/dev/null || true
+        iptables -D "$fwd_chain" -i "$lan_iface" -o "$WG_IFACE" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+        iptables -D INPUT -i "$WG_IFACE" -j ACCEPT 2>/dev/null || true
+    fi
 }
 
 # ── Proxy NETMAP (prerouting: proxy_subnet → real LAN subnet) ─────────────────
