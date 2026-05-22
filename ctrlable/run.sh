@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-ADDON_VERSION="10"
+ADDON_VERSION="11"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
@@ -222,6 +222,14 @@ detect_all_lan_subnets_json() {
 supervisor_self_update() {
     local token="${SUPERVISOR_TOKEN:-}"
     [ -z "$token" ] && return 1
+    # Reload the addon store so Supervisor picks up the latest version from the repo
+    local reload_code
+    reload_code=$(curl -sSL --max-time 60 \
+        -w "%{http_code}" -o /dev/null \
+        -X POST "http://supervisor/store/reload" \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" 2>/dev/null) || reload_code="ERR"
+    info "Supervisor store reload: HTTP $reload_code"
     local code
     code=$(curl -sSL --max-time 30 \
         -w "%{http_code}" -o /dev/null \
