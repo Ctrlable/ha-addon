@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-ADDON_VERSION="8"
+ADDON_VERSION="9"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
@@ -95,21 +95,37 @@ teardown_nat() {
 setup_netmap() {
     local proxy="$1" lan="$2" iface="$3"
     if command -v nft >/dev/null 2>&1; then
-        local a b c lan_hex
-        a=$(printf '%s' "$lan" | cut -d. -f1)
-        b=$(printf '%s' "$lan" | cut -d. -f2)
-        c=$(printf '%s' "$lan" | cut -d. -f3)
-        lan_hex=$(printf "0x%02x%02x%02x00" "$a" "$b" "$c")
-        nft add table ip ctrlnat 2>/dev/null || true
-        nft add chain ip ctrlnat prerouting \
-            '{ type nat hook prerouting priority dstnat; }' 2>/dev/null || true
-        nft flush chain ip ctrlnat prerouting 2>/dev/null || true
-        if nft add rule ip ctrlnat prerouting \
-            iifname "\"$iface\"" ip daddr "$proxy" \
-            dnat ip to ip daddr and 0x000000ff or "$lan_hex" 2>/dev/null; then
-            info "Proxy NETMAP: $proxy → $lan (nft)"
+        # Primary: dnat ip prefix to — HAOS-compatible, avoids shell quoting issues
+        # Uses nft -f - (batch mode) so interface names need no extra escaping
+        if nft -f - 2>/dev/null << EOF
+add table ip ctrlnat
+add chain ip ctrlnat prerouting { type nat hook prerouting priority dstnat; }
+flush chain ip ctrlnat prerouting
+add rule ip ctrlnat prerouting iifname $iface ip daddr $proxy dnat ip prefix to $lan
+EOF
+        then
+            info "Proxy NETMAP: $proxy → $lan (nft prefix)"
             return 0
         fi
+
+        # Fallback: bitwise hex expression (older nft without dnat prefix support)
+        local lan_net a b c lan_hex
+        lan_net=$(printf '%s' "$lan" | cut -d/ -f1)
+        a=$(printf '%s' "$lan_net" | cut -d. -f1)
+        b=$(printf '%s' "$lan_net" | cut -d. -f2)
+        c=$(printf '%s' "$lan_net" | cut -d. -f3)
+        lan_hex=$(printf "0x%02x%02x%02x00" "$a" "$b" "$c")
+        if nft -f - 2>/dev/null << EOF
+add table ip ctrlnat
+add chain ip ctrlnat prerouting { type nat hook prerouting priority dstnat; }
+flush chain ip ctrlnat prerouting
+add rule ip ctrlnat prerouting iifname $iface ip daddr $proxy dnat ip to ip daddr and 0x000000ff or $lan_hex
+EOF
+        then
+            info "Proxy NETMAP: $proxy → $lan (nft bitwise)"
+            return 0
+        fi
+        warn "nft NETMAP failed (tried prefix and bitwise) — check nft version on this device"
     fi
     if iptables -t nat -L PREROUTING -n >/dev/null 2>&1; then
         iptables -t nat -D PREROUTING -i "$iface" -d "$proxy" -j NETMAP --to "$lan" 2>/dev/null || true
