@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-ADDON_VERSION="11"
+ADDON_VERSION="20"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
@@ -360,6 +360,15 @@ run_heartbeat() {
             warn "Heartbeat: HTTP $HB_CODE err=${HB_ERR:0:120}"
         fi
         rm -f "$HB_TMPF" "$HB_TMPF.err" 2>/dev/null || true
+
+        # Re-apply FORWARD/MASQUERADE rules if HAOS/Docker flushed iptables
+        if [ -n "${LAN_IFACE:-}" ] && [ -n "${WG_IFACE:-}" ] && command -v iptables >/dev/null 2>&1; then
+            _fwd_chain="FORWARD"
+            iptables -L DOCKER-USER -n >/dev/null 2>&1 && _fwd_chain="DOCKER-USER"
+            if ! iptables -S "$_fwd_chain" 2>/dev/null | grep -qF -- "-i $WG_IFACE"; then
+                setup_nat "$LAN_IFACE"
+            fi
+        fi
 
         # Retry LAN registration if the initial attempt failed
         if [ "$lan_registered" = "0" ] && [ -n "${LAN_SUBNET:-}" ]; then
