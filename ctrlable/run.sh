@@ -220,7 +220,7 @@ detect_all_lan_subnets_json() {
 
 # ── Supervisor API self-update (HAOS only) ────────────────────────────────────
 supervisor_self_update() {
-    local token="${SUPERVISOR_TOKEN:-}"
+    local token="${SUPERVISOR_TOKEN:-${HASSIO_TOKEN:-}}"
     [ -z "$token" ] && return 1
     # Reload the addon store so Supervisor picks up the latest version from the repo
     local reload_code
