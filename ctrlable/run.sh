@@ -411,7 +411,20 @@ bring_up_tunnel() {
 }
 
 # ── Read token from options ───────────────────────────────────────────────────
-ENROLLMENT_TOKEN=$(python3 -c "import json; print(json.load(open('/data/options.json')).get('enrollment_token',''))" 2>/dev/null) || ENROLLMENT_TOKEN=""
+
+# ── Get HA site name (used as device name) ──────────────────────────────────
+HA_SITE_NAME=""
+_SUP_TOKEN="${SUPERVISOR_TOKEN:-${HASSIO_TOKEN:-}}"
+if [ -n "$_SUP_TOKEN" ]; then
+    _HA_CFG=$(curl -s --max-time 5 \
+        -H "Authorization: Bearer $_SUP_TOKEN" \
+        "http://supervisor/core/api/config" 2>/dev/null) || _HA_CFG=""
+    if [ -n "$_HA_CFG" ]; then
+        HA_SITE_NAME=$(python3 -c 'import sys,json; d=json.loads(sys.stdin.read()); print(d.get("location_name","").strip())' <<< "$_HA_CFG" 2>/dev/null) || HA_SITE_NAME=""
+    fi
+fi
+[ -n "$HA_SITE_NAME" ] && info "HA site name: $HA_SITE_NAME"
+ENROLLMENT_TOKEN=$(python3 -c "import json; d=json.load(open('/data/options.json')); print(d.get('enrollment_token') or '')" 2>/dev/null) || ENROLLMENT_TOKEN=""
 
 # ── Check if already enrolled ────────────────────────────────────────────────
 if [ -f "$CREDS_FILE" ]; then
@@ -458,28 +471,44 @@ if [ -n "$LAN_IFACE" ]; then
     fi
 fi
 
-# ── Enroll ────────────────────────────────────────────────────────────────────
-[ -z "$ENROLLMENT_TOKEN" ] && die "enrollment_token is not set. Open the add-on Configuration tab and paste your token."
-
-info "Enrolling with Ctrlable..."
-
+# ── Enroll ─────────────────────────────────────────────────────────────────────────────
 IFACE=$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')
 [ -z "$IFACE" ] && IFACE="eth0"
 MAC=$(cat /sys/class/net/"$IFACE"/address 2>/dev/null || echo "00:00:00:00:00:00")
 MAC=$(echo "$MAC" | tr '[:lower:]' '[:upper:]')
 HN=$(hostname 2>/dev/null || echo "homeassistant")
 
-# Build JSON payload — include lan_subnet if detected
-if [ -n "$LAN_SUBNET" ]; then
-    PAYLOAD="{\"token\":\"$ENROLLMENT_TOKEN\",\"mac_address\":\"$MAC\",\"platform\":\"haos_addon\",\"hostname\":\"$HN\",\"lan_subnet\":\"$LAN_SUBNET\"}"
-else
-    PAYLOAD="{\"token\":\"$ENROLLMENT_TOKEN\",\"mac_address\":\"$MAC\",\"platform\":\"haos_addon\",\"hostname\":\"$HN\"}"
-fi
+# Device name: prefer HA site name, fall back to hostname
+DEVICE_NAME="${HA_SITE_NAME:-$HN}"
+info "Enrolling as: $DEVICE_NAME"
 
-RESPONSE=$(curl -sk --max-time 30 -X POST "$ENROLL_URL" \
-    -H "Content-Type: application/json" \
-    -d "$PAYLOAD") \
-    || die "Enrollment request failed — check network connectivity"
+ADDON_PROV_KEY="X3UPHNmhtFmr5cj2DDfVZ_JgKrLE68_MHrZtOjPuLcVoh44qNtvQbQ"
+AUTO_ENROLL_URL="https://portal.ctrlable.com/v1/auto-enroll"
+
+if [ -z "$ENROLLMENT_TOKEN" ]; then
+    info "No enrollment token set — using auto-enrollment..."
+    if [ -n "$LAN_SUBNET" ]; then
+        PAYLOAD="{\"mac_address\":\"$MAC\",\"platform\":\"haos_addon\",\"hostname\":\"$HN\",\"device_name\":\"$DEVICE_NAME\",\"lan_subnet\":\"$LAN_SUBNET\"}"
+    else
+        PAYLOAD="{\"mac_address\":\"$MAC\",\"platform\":\"haos_addon\",\"hostname\":\"$HN\",\"device_name\":\"$DEVICE_NAME\"}"
+    fi
+    RESPONSE=$(curl -sk --max-time 30 -X POST "$AUTO_ENROLL_URL" \
+        -H "Content-Type: application/json" \
+        -H "X-Provisioning-Key: $ADDON_PROV_KEY" \
+        -d "$PAYLOAD") \
+        || die "Auto-enrollment request failed — check network connectivity"
+else
+    info "Enrolling with provided token..."
+    if [ -n "$LAN_SUBNET" ]; then
+        PAYLOAD="{\"token\":\"$ENROLLMENT_TOKEN\",\"mac_address\":\"$MAC\",\"platform\":\"haos_addon\",\"hostname\":\"$HN\",\"device_name\":\"$DEVICE_NAME\",\"lan_subnet\":\"$LAN_SUBNET\"}"
+    else
+        PAYLOAD="{\"token\":\"$ENROLLMENT_TOKEN\",\"mac_address\":\"$MAC\",\"platform\":\"haos_addon\",\"hostname\":\"$HN\",\"device_name\":\"$DEVICE_NAME\"}"
+    fi
+    RESPONSE=$(curl -sk --max-time 30 -X POST "$ENROLL_URL" \
+        -H "Content-Type: application/json" \
+        -d "$PAYLOAD") \
+        || die "Enrollment request failed — check network connectivity"
+fi
 
 if echo "$RESPONSE" | grep -q '"detail"'; then
     DETAIL=$(json_get "detail" "$RESPONSE")
