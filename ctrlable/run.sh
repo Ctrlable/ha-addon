@@ -308,8 +308,39 @@ scan_lan() {
 }
 
 # ── Heartbeat loop ────────────────────────────────────────────────────────────
+# ── Install/refresh the vendored Ctrlable Store component ─────────────────────
+install_ctrlable_store() {
+    local src="/opt/ctrlable/store/ctrlable_store"
+    [ -d "$src" ] || { warn "no vendored Ctrlable Store"; return 0; }
+    local cfg=""
+    for d in /homeassistant /config; do
+        [ -f "$d/configuration.yaml" ] && { cfg="$d"; break; }
+    done
+    [ -z "$cfg" ] && { warn "HA config dir not mapped (need homeassistant_config:rw) — skipping Store"; return 0; }
+    local dest="$cfg/custom_components/ctrlable_store"
+    local want have
+    want=$(json_get version "$(cat "$src/manifest.json" 2>/dev/null)")
+    [ -f "$dest/manifest.json" ] && have=$(json_get version "$(cat "$dest/manifest.json" 2>/dev/null)") || have=""
+    if [ -n "$have" ] && [ "$want" = "$have" ]; then
+        info "Ctrlable Store up to date ($have)"; return 0
+    fi
+    info "Installing Ctrlable Store $want (was ${have:-none})"
+    mkdir -p "$cfg/custom_components"
+    rm -rf "$dest.tmp"; cp -r "$src" "$dest.tmp"; rm -rf "$dest"; mv "$dest.tmp" "$dest"
+    grep -q '^ctrlable_store:' "$cfg/configuration.yaml" 2>/dev/null || printf '\nctrlable_store:\n' >> "$cfg/configuration.yaml"
+    local tok="${SUPERVISOR_TOKEN:-${HASSIO_TOKEN:-}}"
+    if [ -n "$tok" ]; then
+        local code
+        code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST -H "Authorization: Bearer $tok" http://supervisor/core/restart 2>/dev/null) || code="000"
+        info "Ctrlable Store installed; core restart requested (HTTP $code)"
+    else
+        warn "No supervisor token — Store installed; restart HA to load it"
+    fi
+}
+
 run_heartbeat() {
     info "Starting heartbeat loop (every 60s, LAN scan every 5 min)"
+    install_ctrlable_store || true
     local lan_registered="${1:-0}"
     local hb_count=0
     while true; do

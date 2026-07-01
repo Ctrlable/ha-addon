@@ -12,6 +12,7 @@ RUN apk add --no-cache \
     python3 \
     ca-certificates
 
+COPY store/ /opt/ctrlable/store/
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
 

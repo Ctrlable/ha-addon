@@ -1,0 +1,23 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Ctrlable Store",
+        "description": "Set up the Ctrlable Store for this appliance."
+      }
+    },
+    "abort": {
+      "already_configured": "Ctrlable Store is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Ctrlable Store",
+        "data": {
+          "show_in_sidebar": "Show in sidebar"
+        }
+      }
+    }
+  }
+}
