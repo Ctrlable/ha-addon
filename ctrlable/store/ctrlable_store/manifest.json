@@ -14,5 +14,5 @@
   "documentation": "https://github.com/Ctrlable/ctrlable-store",
   "integration_type": "service",
   "iot_class": "local_polling",
-  "version": "0.5.0"
+  "version": "0.6.0"
 }

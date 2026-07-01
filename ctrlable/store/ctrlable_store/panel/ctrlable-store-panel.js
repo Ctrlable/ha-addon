@@ -20,7 +20,7 @@ class CtrlableStorePanel extends HTMLElement {
         .ico{width:40px;height:40px;border-radius:10px;background:#0F1216;object-fit:contain;flex:none;padding:3px;box-sizing:border-box}
         .meta{flex:1}.name{font-weight:600}.ver{color:#8A94A6;font-size:13px;margin-top:2px}
         .badge{font-size:11px;padding:2px 8px;border-radius:999px;background:#23304a;color:#9cc1ff;margin-left:8px}
-        .badge.brk{background:#3a2330;color:#ff9cb0}.badge.ok{background:#1e3a2a;color:#7ee0a3}
+        .badge.brk{background:#3a2330;color:#ff9cb0}.badge.ok{background:#1e3a2a;color:#7ee0a3}.badge.lic{background:#3a3320;color:#ffcf6b}
         .chev{color:#5d6675;font-size:18px}
         button{background:#4C8DFF;color:#fff;border:0;border-radius:8px;padding:9px 18px;font-weight:600;cursor:pointer;font-size:14px}
         button.sec{background:#232a33;color:#E7ECF3}button:disabled{opacity:.5;cursor:default}
@@ -85,7 +85,8 @@ class CtrlableStorePanel extends HTMLElement {
   }
 
   _card(p, idx) {
-    const status = !p.installed ? `<span class="badge">not installed</span>`
+    const status = !p.licensed ? `<span class="badge lic">license required</span>`
+      : !p.installed ? `<span class="badge">not installed</span>`
       : p.update_available ? `<span class="badge">update</span>` : `<span class="badge ok">installed</span>`;
     const brk = p.breaking ? `<span class="badge brk">breaking</span>` : "";
     const cur = p.installed ? ` · installed ${p.installed_version}` : "";
@@ -99,8 +100,9 @@ class CtrlableStorePanel extends HTMLElement {
 
   _renderDetail(p) {
     const view = this.shadowRoot.getElementById("view");
-    const action = !p.installed ? "Install" : (p.update_available ? `Update to ${p.version}` : "Up to date");
-    const dis = (p.installed && !p.update_available) ? "disabled" : "";
+    const action = !p.licensed ? "License required"
+      : !p.installed ? "Install" : (p.update_available ? `Update to ${p.version}` : "Up to date");
+    const dis = (!p.licensed || (p.installed && !p.update_available)) ? "disabled" : "";
     const brk = p.breaking ? `<span class="badge brk">breaking</span>` : "";
     const mb = (p.size_bytes / 1048576).toFixed(1);
     view.innerHTML = `
@@ -111,6 +113,7 @@ class CtrlableStorePanel extends HTMLElement {
         <div class="sub">Latest v${p.version}${p.installed ? ` · installed v${p.installed_version}` : " · not installed"}</div>
         <div id="desc" class="desc"></div>
         <div class="grid">
+          <div class="k">Licensed</div><div class="v">${p.licensed ? "Yes" : "No — contact Ctrlable to license this product"}</div>
           <div class="k">Latest version</div><div class="v">${p.version}</div>
           <div class="k">Installed</div><div class="v">${p.installed ? p.installed_version : "—"}</div>
           <div class="k">Channel</div><div class="v">${p.channel || "stable"}</div>
