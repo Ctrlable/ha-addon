@@ -85,9 +85,9 @@ class CtrlableStorePanel extends HTMLElement {
   }
 
   _card(p, idx) {
-    const status = !p.licensed ? `<span class="badge lic">license required</span>`
-      : !p.installed ? `<span class="badge">not installed</span>`
+    const inst = !p.installed ? `<span class="badge">not installed</span>`
       : p.update_available ? `<span class="badge">update</span>` : `<span class="badge ok">installed</span>`;
+    const status = inst + (p.licensed ? "" : `<span class="badge lic">unlicensed</span>`);
     const brk = p.breaking ? `<span class="badge brk">breaking</span>` : "";
     const cur = p.installed ? ` · installed ${p.installed_version}` : "";
     const ico = p.icon_url ? `<img class="ico" src="${p.icon_url}" onerror="this.style.visibility='hidden'">` : `<div class="ico"></div>`;
@@ -100,9 +100,8 @@ class CtrlableStorePanel extends HTMLElement {
 
   _renderDetail(p) {
     const view = this.shadowRoot.getElementById("view");
-    const action = !p.licensed ? "License required"
-      : !p.installed ? "Install" : (p.update_available ? `Update to ${p.version}` : "Up to date");
-    const dis = (!p.licensed || (p.installed && !p.update_available)) ? "disabled" : "";
+    const action = !p.installed ? "Install" : (p.update_available ? `Update to ${p.version}` : "Up to date");
+    const dis = (p.installed && !p.update_available) ? "disabled" : "";
     const brk = p.breaking ? `<span class="badge brk">breaking</span>` : "";
     const mb = (p.size_bytes / 1048576).toFixed(1);
     view.innerHTML = `
@@ -122,7 +121,8 @@ class CtrlableStorePanel extends HTMLElement {
           <div class="k">SHA-256</div><div class="v">${p.sha256 || "—"}</div>
         </div>
         ${p.changelog ? `<div class="k">Changelog</div><div class="cl">${p.changelog}</div>` : ""}
-        <div style="margin-top:22px"><button id="act" ${dis}>${action}</button></div>
+        <div style="margin-top:22px"><button id="act" ${dis}>${action}</button>
+        ${!p.licensed ? `<div class="sub" style="margin-top:10px">⚠ Not licensed on this instance — it will install, but the component requires a license (applied in its own panel) to run.</div>` : ""}</div>
       </div>`;
     this.shadowRoot.getElementById("back").addEventListener("click", () => this._renderList());
     const act = this.shadowRoot.getElementById("act");
