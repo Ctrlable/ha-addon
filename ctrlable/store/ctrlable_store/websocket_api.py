@@ -73,6 +73,20 @@ async def ws_install(hass, connection, msg):
     connection.send_result(msg["id"], {"product": product, "version": version, "restart_required": True})
 
 
+@websocket_api.websocket_command(
+    {vol.Required("type"): "ctrlable_store/uninstall", vol.Required("product"): str}
+)
+@websocket_api.async_response
+async def ws_uninstall(hass, connection, msg):
+    cc = hass.data[DOMAIN]["cc_dir"]
+    try:
+        await hass.async_add_executor_job(uninstall, cc, msg["product"])
+    except Exception as err:  # noqa: BLE001
+        connection.send_error(msg["id"], "uninstall_failed", str(err))
+        return
+    connection.send_result(msg["id"], {"product": msg["product"], "restart_required": True})
+
+
 @websocket_api.websocket_command({vol.Required("type"): "ctrlable_store/restart"})
 @websocket_api.async_response
 async def ws_restart(hass, connection, msg):
