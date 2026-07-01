@@ -122,11 +122,14 @@ class CtrlableStorePanel extends HTMLElement {
         </div>
         ${p.changelog ? `<div class="k">Changelog</div><div class="cl">${p.changelog}</div>` : ""}
         <div style="margin-top:22px"><button id="act" ${dis}>${action}</button>
+        ${p.installed ? `<button id="rm" class="sec" style="margin-left:10px;color:#ff9cb0">Remove</button>` : ""}
         ${!p.licensed ? `<div class="sub" style="margin-top:10px">⚠ Not licensed on this instance — it will install, but the component requires a license (applied in its own panel) to run.</div>` : ""}</div>
       </div>`;
     this.shadowRoot.getElementById("back").addEventListener("click", () => this._renderList());
     const act = this.shadowRoot.getElementById("act");
     if (!dis) act.addEventListener("click", () => this._install(p, act));
+    const rm = this.shadowRoot.getElementById("rm");
+    if (rm) rm.addEventListener("click", () => this._uninstall(p, rm));
     // Render the README/description with HA's markdown renderer (safe).
     const desc = this.shadowRoot.getElementById("desc");
     if (p.description) {
@@ -151,6 +154,18 @@ class CtrlableStorePanel extends HTMLElement {
     }
   }
 
+  async _uninstall(p, btn) {
+    if (!confirm(`Remove ${p.name || p.product} from this appliance?`)) return;
+    btn.disabled = true; btn.textContent = "Removing…";
+    try {
+      const r = await this._ws({ type: "ctrlable_store/uninstall", product: p.product });
+      if (r.restart_required) this._showRestart(`${p.name || p.product} removed — restart to apply.`);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = "Remove";
+      this._showRestart(`Remove failed: ${e.message || e}`, false);
+    }
+  }
+
   _showRestart(text, restart = true) {
     const bar = this.shadowRoot.getElementById("bar");
     bar.style.display = "block";
@@ -160,7 +175,7 @@ class CtrlableStorePanel extends HTMLElement {
 
   async _restart() {
     const bar = this.shadowRoot.getElementById("bar");
-    bar.innerHTML = `<span class="warn">Restarting Home Assistant…</span>`;
+    bar.innerHTML = `<span class="warn">Restarting Ctrlable Pro…</span>`;
     try { await this._ws({ type: "ctrlable_store/restart" }); } catch (e) {}
   }
 }

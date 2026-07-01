@@ -23,6 +23,7 @@ from homeassistant.loader import async_get_integration
 from homeassistant.helpers.event import async_track_time_interval
 
 from . import websocket_api
+from .installer import install_zip, uninstall
 from .store_client import async_build_client
 from .const import (
     DOMAIN,
@@ -84,7 +85,55 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(async_track_time_interval(
         hass, lambda _now: hass.async_create_task(_refresh_provisioned(hass)),
         timedelta(minutes=REFRESH_INTERVAL_MIN)))
+
+    # Poll for remote install/remove jobs queued from the portal.
+    hass.async_create_task(_poll_jobs(hass))
+    entry.async_on_unload(async_track_time_interval(
+        hass, lambda _now: hass.async_create_task(_poll_jobs(hass)),
+        timedelta(seconds=90)))
     return True
+
+
+async def _poll_jobs(hass: HomeAssistant) -> None:
+    """Pull queued remote install/remove jobs from the portal and apply them."""
+    data = hass.data.setdefault(DOMAIN, {})
+    cc = data.get("cc_dir")
+    try:
+        client = await async_build_client(hass, data.get("instance_id", ""))
+        if not client.configured:
+            return
+        jobs = await client.get_jobs()
+    except Exception:  # noqa: BLE001
+        return
+    if not jobs:
+        return
+    restart_needed = False
+    for job in jobs:
+        jid, product = job["id"], job["product"]
+        action = job.get("action", "install")
+        try:
+            if action == "remove":
+                await hass.async_add_executor_job(uninstall, cc, product)
+            else:
+                cat = await client.get_catalog()
+                entry = next((p for p in cat.get("products", []) if p["product"] == product), None)
+                if entry is None:
+                    raise RuntimeError("product not in catalog")
+                ver = job.get("target_version") or entry["version"]
+                sha = entry.get("sha256") if ver == entry["version"] else None
+                blob = await client.download(product, ver, sha)
+                await hass.async_add_executor_job(install_zip, cc, product, blob)
+            await client.report_job(jid, "applied", f"{action} {product} ok")
+            restart_needed = True
+            _LOGGER.info("Ctrlable Store: remote %s %s applied", action, product)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.exception("Ctrlable Store: remote %s %s failed", action, product)
+            try:
+                await client.report_job(jid, "failed", str(err))
+            except Exception:  # noqa: BLE001
+                pass
+    if restart_needed:
+        await hass.services.async_call("homeassistant", "restart", blocking=False)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

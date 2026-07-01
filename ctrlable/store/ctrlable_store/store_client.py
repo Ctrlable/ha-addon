@@ -96,3 +96,19 @@ class StoreClient:
             if got != sha256:
                 raise StoreError(f"sha256 mismatch (expected {sha256[:12]}, got {got[:12]})")
         return blob
+
+    async def get_jobs(self) -> list[dict]:
+        """Pending remote install/remove jobs for this appliance."""
+        url = f"{self._base}/store/jobs"
+        async with self._session.get(url, headers=self._headers()) as resp:
+            if resp.status != 200:
+                raise StoreError(f"jobs HTTP {resp.status}")
+            return await resp.json()
+
+    async def report_job(self, job_id: str, status: str, log: str = "") -> None:
+        url = f"{self._base}/store/jobs/{job_id}/status"
+        async with self._session.post(
+            url, headers=self._headers(), json={"status": status, "log": log[:4000]}
+        ) as resp:
+            if resp.status not in (200, 204):
+                raise StoreError(f"job status HTTP {resp.status}")

@@ -62,3 +62,14 @@ def install_zip(cc_dir: str, product: str, blob: bytes) -> str:
     shutil.rmtree(backup, ignore_errors=True)
     _LOGGER.info("Ctrlable Store: installed %s %s", product, version)
     return version
+
+
+def uninstall(cc_dir: str, product: str) -> None:
+    """Remove a component's directory from custom_components (HACS-style)."""
+    if product in ("ctrlable_store",):
+        raise ValueError("cannot remove the Ctrlable Store itself")
+    dest = os.path.join(cc_dir, product)
+    if not os.path.isdir(dest):
+        raise ValueError("not installed")
+    shutil.rmtree(dest)
+    _LOGGER.info("Ctrlable Store: removed %s", product)

@@ -8,7 +8,7 @@ from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
 from .const import DOMAIN
-from .installer import install_zip, installed_version
+from .installer import install_zip, installed_version, uninstall
 from .store_client import async_build_client
 
 _LOGGER = logging.getLogger(__name__)
@@ -18,6 +18,7 @@ _LOGGER = logging.getLogger(__name__)
 def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_catalog)
     websocket_api.async_register_command(hass, ws_install)
+    websocket_api.async_register_command(hass, ws_uninstall)
     websocket_api.async_register_command(hass, ws_restart)
 
 
