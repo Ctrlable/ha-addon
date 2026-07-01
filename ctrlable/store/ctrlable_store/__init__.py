@@ -144,7 +144,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def _load_sidebar_show(hass: HomeAssistant) -> bool:
     store = Store(hass, 1, SIDEBAR_STORE_KEY)
     data = await store.async_load() or {}
-    return bool(data.get("show", True))   # default: visible on first install
+    return bool(data.get("show", False))  # default: hidden — user opts in via the switch/Configure
 
 
 async def _save_sidebar_show(hass: HomeAssistant, show: bool) -> None:
