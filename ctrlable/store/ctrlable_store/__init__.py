@@ -79,17 +79,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    # Interval actions must be @callback so HA runs them ON the event loop. A
+    # plain lambda is classified as a sync job and run in an executor thread —
+    # calling hass.async_create_task from there trips HA's thread-safety guard
+    # (RuntimeError: async_create_task from a thread other than the event loop).
+    @callback
+    def _tick_refresh_provisioned(_now) -> None:
+        hass.async_create_task(_refresh_provisioned(hass))
+
+    @callback
+    def _tick_poll_jobs(_now) -> None:
+        hass.async_create_task(_poll_jobs(hass))
+
     # Check assignment/provisioning now + periodically (reveals the Store once the
     # appliance is assigned to a client/location, without a restart).
     hass.async_create_task(_refresh_provisioned(hass))
     entry.async_on_unload(async_track_time_interval(
-        hass, lambda _now: hass.async_create_task(_refresh_provisioned(hass)),
+        hass, _tick_refresh_provisioned,
         timedelta(minutes=REFRESH_INTERVAL_MIN)))
 
     # Poll for remote install/remove jobs queued from the portal.
     hass.async_create_task(_poll_jobs(hass))
     entry.async_on_unload(async_track_time_interval(
-        hass, lambda _now: hass.async_create_task(_poll_jobs(hass)),
+        hass, _tick_poll_jobs,
         timedelta(seconds=90)))
     return True
 
