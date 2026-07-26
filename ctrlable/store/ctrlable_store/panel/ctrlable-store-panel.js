@@ -3,6 +3,29 @@
 class CtrlableStorePanel extends HTMLElement {
   set hass(hass) { this._hass = hass; if (!this._init) { this._init = true; this._q = ""; this._render(); this._load(); } }
 
+  // HA wraps custom panels in <partial-panel-resolver>, which is display:inline /
+  // height:auto and doesn't propagate a definite height — so :host{min-height:100%}
+  // resolves against a collapsed parent and the dark background stops short of the
+  // viewport. Measure our top and set a min-height that fills to the viewport bottom
+  // (min-height, not height, so a long catalog still scrolls the page).
+  connectedCallback() {
+    if (!this._fitBound) {
+      this._fitBound = () => this._fitHeight();
+      window.addEventListener("resize", this._fitBound);
+    }
+    this._fitHeight();
+    requestAnimationFrame(() => this._fitHeight());
+  }
+  disconnectedCallback() {
+    if (this._fitBound) { window.removeEventListener("resize", this._fitBound); this._fitBound = null; }
+  }
+  _fitHeight() {
+    if (!this.isConnected) return;
+    const top = this.getBoundingClientRect().top;
+    const h = Math.max(0, window.innerHeight - top);
+    if (h > 0) this.style.minHeight = h + "px";
+  }
+
   async _ws(msg) { return this._hass.connection.sendMessagePromise(msg); }
 
   _render() {
