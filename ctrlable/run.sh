@@ -386,6 +386,32 @@ run_heartbeat() {
                     setup_netmap "$HB_PROXY" "$HB_LAN" "$WG_IFACE"
                 fi
             fi
+
+            # Converge the Core image to what the portal says this appliance
+            # should run — the client's brand, or a per-device override.
+            # Declarative: we compare and only act on a difference, so this is a
+            # no-op on every other beat. It is also how an appliance already in
+            # the field picks up a corrected image: republishing the same tag at
+            # the same version never triggers a Supervisor re-pull, but pointing
+            # it at a differently NAMED image does.
+            HB_CORE=$(printf '%s' "$HB_BODY" | grep -o '"core_image":"[^"]*"' | cut -d'"' -f4) || HB_CORE=""
+            if [ -n "$HB_CORE" ]; then
+                CUR_CORE=$(ha core info --raw-json 2>/dev/null | grep -o '"image":"[^"]*"' | head -1 | cut -d'"' -f4) || CUR_CORE=""
+                if [ -n "$CUR_CORE" ] && [ "$CUR_CORE" != "$HB_CORE" ]; then
+                    info "Core image: $CUR_CORE -> $HB_CORE (per portal)"
+                    if ha core options --image "$HB_CORE" >/dev/null 2>&1; then
+                        # Rebuild recreates the container from the new image and
+                        # restarts HA — brief downtime, once, only on change.
+                        if ha core rebuild >/dev/null 2>&1; then
+                            info "Core rebuilt on $HB_CORE"
+                        else
+                            warn "core rebuild failed after setting $HB_CORE"
+                        fi
+                    else
+                        warn "could not set core image to $HB_CORE"
+                    fi
+                fi
+            fi
         else
             HB_ERR=$(cat "$HB_TMPF.err" 2>/dev/null) || HB_ERR=""
             warn "Heartbeat: HTTP $HB_CODE err=${HB_ERR:0:120}"
