@@ -36,6 +36,40 @@ HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
        "content-length", "accept-encoding"}
 
 
+# Every fetch() in the panel is root-absolute -- fetch("/health"), fetch("/zones").
+# Under ingress the page lives at /api/hassio_ingress/<token>/, so those resolve
+# against the ORIGIN and hit Home Assistant itself rather than this add-on. HA
+# answers with something that is not the panel's JSON, and the first symptom is a
+# parse error on whichever card polls first.
+#
+# Patching fetch once is what fixes all of them, including any added later. The
+# alternative -- rewriting fetch("/ in the HTML -- would work today and silently
+# miss a call written with different quoting tomorrow.
+#
+# Left/right of the boundary matters: only paths starting with a single "/" are
+# rewritten, so "//cdn..." and absolute URLs are untouched, and a path already
+# carrying the prefix is not doubled.
+INGRESS_SHIM = """<script>
+(function(){
+  var P = "__PREFIX__";
+  if(!P) return;
+  function fix(u){
+    if(typeof u !== "string") return u;
+    if(u.charAt(0) !== "/" || u.charAt(1) === "/") return u;
+    if(u.indexOf(P + "/") === 0) return u;
+    return P + u;
+  }
+  var f = window.fetch;
+  if(f) window.fetch = function(u, o){ return f.call(this, fix(u), o); };
+  var xo = window.XMLHttpRequest && window.XMLHttpRequest.prototype.open;
+  if(xo) window.XMLHttpRequest.prototype.open = function(m, u){
+    arguments[1] = fix(u);
+    return xo.apply(this, arguments);
+  };
+})();
+</script>"""
+
+
 def ingress_prefix(headers):
     """The path HA is serving this addon under, if any."""
     return (headers.get("X-Ingress-Path") or "").rstrip("/")
@@ -99,6 +133,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             text = payload.decode("utf-8", "replace")
             for attr in ('action="', 'href="', 'src="'):
                 text = text.replace(attr + "/", attr + prefix + "/")
+            text = INGRESS_SHIM.replace("__PREFIX__", prefix) + text
             payload = text.encode()
 
         out = []

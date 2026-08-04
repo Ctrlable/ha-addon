@@ -4,7 +4,7 @@ description: >-
   Provision and manage the hardware behind Ctrlable Pro — USB audio cards, hubs,
   capture inputs, zones, voice assistants and snapcast clients — from a panel
   inside Home Assistant.
-version: "0.1.1"
+version: "0.1.2"
 slug: "ctrlable_hardware_manager_proxy"
 url: "https://github.com/Ctrlable/ha-addon"
 
