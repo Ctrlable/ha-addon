@@ -1,0 +1,20 @@
+---
+configuration:
+  manager_url:
+    name: Manager address
+    description: >-
+      Where the Ctrlable Hardware Manager is reachable, for example
+      http://192.168.1.50:8080. There is no default — the add-on cannot know
+      where the manager runs, and a wrong guess would quietly talk to whatever
+      answers at that address.
+  service_key:
+    name: Service key
+    description: >-
+      From the manager's auth.conf. With this set, your existing Ctrlable Pro
+      session signs you in and you are not asked for a second password. Leave it
+      empty and the panel shows the manager's own login instead.
+  verify_tls:
+    name: Verify TLS
+    description: >-
+      Check the manager's certificate when reached over HTTPS. Leave off for a
+      plain HTTP address on the local network.
