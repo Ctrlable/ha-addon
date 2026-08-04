@@ -1,0 +1,15 @@
+---
+configuration:
+  bridges:
+    name: DALI bridges
+    description: >-
+      One entry per DALI bridge on the network. Host and port are the bridge's
+      admin UI (8099 unless changed); username and password are its admin
+      credentials — a factory-fresh bridge uses admin / admin.
+  log_level:
+    name: Log level
+    description: How much the proxy writes to the add-on log.
+network:
+  8098/tcp: >-
+    Optional direct access to the proxy without going through Ctrlable Pro.
+    Leave unmapped unless you need it — this path is not authenticated.

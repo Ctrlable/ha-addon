@@ -1,0 +1,54 @@
+---
+name: "Ctrlable DALI Bridge"
+version: "1.0.0"
+slug: "ctrlable_dali_proxy"
+description: "Open the DALI bridge admin UI from inside Ctrlable Pro"
+url: "https://github.com/Ctrlable/ha-addon"
+
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+
+# Served through HA ingress: the bridge UI appears in the sidebar, authenticated
+# by Ctrlable Pro itself. The bridge's own basic-auth credentials stay in this
+# add-on's options and are injected upstream, so nobody gets a browser password
+# prompt inside the panel.
+ingress: true
+ingress_port: 8098
+panel_icon: mdi:lightbulb-group
+panel_title: "DALI Bridge"
+
+# Direct LAN access is off by default (ingress is the intended door). Map a host
+# port here if you want to reach the proxy without going through Ctrlable Pro.
+ports:
+  8098/tcp: null
+ports_description:
+  8098/tcp: "DALI bridge proxy (optional direct access)"
+
+startup: application
+boot: auto
+init: false
+
+# The bridges live on the LAN, not on the internal hassio network.
+host_network: false
+
+options:
+  bridges:
+    - name: "DALI Bridge"
+      host: "10.1.8.45"
+      port: 8099
+      username: "admin"
+      password: "admin"
+  log_level: "info"
+
+schema:
+  bridges:
+    - name: str
+      host: str
+      port: port
+      username: str
+      password: password
+  log_level: list(debug|info|warning|error)?

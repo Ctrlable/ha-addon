@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "ctrlable/**"
+      - "ctrlable_dali_proxy/**"
       - ".github/workflows/build.yaml"
   pull_request:
     branches: [main]
@@ -12,10 +13,16 @@ on:
 
 jobs:
   build:
-    name: Validate build (${{ matrix.arch }})
+    name: Validate ${{ matrix.addon }} (${{ matrix.arch }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
+        # Both dimensions belong in the matrix proper: an `include` entry that
+        # names only `arch` attaches its platform/build_from to every addon,
+        # instead of quietly collapsing to one arch.
+        addon: [ctrlable, ctrlable_dali_proxy]
+        arch: [aarch64, amd64]
         include:
           - arch: aarch64
             platform: linux/arm64
@@ -36,10 +43,10 @@ jobs:
       - name: Build (validate only)
         uses: docker/build-push-action@v6
         with:
-          context: ./ctrlable
+          context: ./${{ matrix.addon }}
           platforms: ${{ matrix.platform }}
           push: false
           build-args: |
             BUILD_FROM=${{ matrix.build_from }}
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.addon }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.addon }}-${{ matrix.arch }}
