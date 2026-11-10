@@ -1,0 +1,12 @@
+configuration:
+  host:
+    name: Orchestrator host (optional)
+    description: >-
+      Leave blank to auto-discover the orchestrator on the site LAN. Set an IP
+      or hostname only to pin a specific orchestrator.
+  port:
+    name: Orchestrator port
+    description: The orchestrator's HTTP port (default 8000).
+  log_level:
+    name: Log level
+    description: Add-on log verbosity.

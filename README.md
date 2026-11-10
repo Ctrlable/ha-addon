@@ -13,4 +13,10 @@ Connects your Home Assistant to the Ctrlable remote management platform via a se
 Puts the admin UI of one or more DALI bridges in the sidebar, through ingress —
 no separate IP to remember and no second password prompt.
 
+### [Ctrlable Orchestrator](./ctrlable_orchestrator)
+
+Puts the Ctrlable Orchestrator (appliance provisioner) in the sidebar, through
+ingress. Auto-discovers the orchestrator on the site LAN — no IP to enter, and
+it keeps working after the appliance moves sites and its IP changes.
+
 **Installation:** Click the button above, or manually add `https://github.com/Ctrlable/ha-addon` as a custom repository in HA.
