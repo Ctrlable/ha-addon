@@ -1,0 +1,29 @@
+---
+name: "Ctrlable Shower Server"
+version: "1.0.0"
+slug: "ctrlable_moen_server"
+description: "Keeps U by Moen showers controllable when Moen's cloud runs out of daily messages"
+url: "https://github.com/Ctrlable/ha-addon"
+
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+
+# The showers connect to this box's own address on 443, so the add-on uses
+# the host network. The unencrypted port is for Ctrlable Pro on this box
+# only and listens on 127.0.0.1.
+host_network: true
+startup: services
+boot: auto
+init: false
+
+options:
+  local_port: 8478
+  verbose: false
+
+schema:
+  local_port: port
+  verbose: bool

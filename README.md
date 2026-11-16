@@ -19,4 +19,10 @@ Puts the Ctrlable Orchestrator (appliance provisioner) in the sidebar, through
 ingress. Auto-discovers the orchestrator on the site LAN — no IP to enter, and
 it keeps working after the appliance moves sites and its IP changes.
 
+### [Ctrlable Shower Server](./ctrlable_moen_server)
+
+Keeps U by Moen smart showers controllable from Ctrlable Pro when Moen's cloud
+runs out of its shared daily message allowance. The showers and Ctrlable Pro
+talk to this add-on on the site instead (needs one DNS record on the router).
+
 **Installation:** Click the button above, or manually add `https://github.com/Ctrlable/ha-addon` as a custom repository in HA.

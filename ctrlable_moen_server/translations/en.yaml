@@ -1,0 +1,11 @@
+---
+configuration:
+  local_port:
+    name: Port for Ctrlable Pro
+    description: >-
+      The U by Moen integration on this box connects here. Set its
+      "House server" option to ws://127.0.0.1 and this port (8478 unless
+      changed). Only this box can reach it.
+  verbose:
+    name: Log message contents
+    description: Write each relayed message to the log, not just its name.
