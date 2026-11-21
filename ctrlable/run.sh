@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-ADDON_VERSION="21"
+ADDON_VERSION="22"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
@@ -138,21 +138,32 @@ EOF
             return 0
         fi
 
-        # Fallback: bitwise hex expression (older nft without dnat prefix support)
-        local lan_net a b c lan_hex
+        # Fallback: bitwise hex expression (older nft without dnat prefix support).
+        # Prefix-correct: derive the hostmask from the subnet's prefix length
+        # instead of hardcoding /24 (0x000000ff). A /23 then maps its full host
+        # range — the upper half (e.g. 10.0.1.x) no longer collapses onto the
+        # lower half. new_daddr = (daddr & hostmask) | lan_network.
+        local lan_net prefix a b c d hostbits hostmask lan_int hostmask_hex lan_hex
         lan_net=$(printf '%s' "$lan" | cut -d/ -f1)
+        prefix=$(printf '%s' "$lan" | cut -d/ -f2)
+        case "$prefix" in ''|*[!0-9]*) prefix=24 ;; esac
         a=$(printf '%s' "$lan_net" | cut -d. -f1)
         b=$(printf '%s' "$lan_net" | cut -d. -f2)
         c=$(printf '%s' "$lan_net" | cut -d. -f3)
-        lan_hex=$(printf "0x%02x%02x%02x00" "$a" "$b" "$c")
+        d=$(printf '%s' "$lan_net" | cut -d. -f4)
+        hostbits=$((32 - prefix))
+        if [ "$hostbits" -ge 32 ]; then hostmask=4294967295; else hostmask=$(( (1 << hostbits) - 1 )); fi
+        lan_int=$(( (a * 16777216) + (b * 65536) + (c * 256) + d ))
+        hostmask_hex=$(printf '0x%08x' "$hostmask")
+        lan_hex=$(printf '0x%08x' "$lan_int")
         if nft -f - 2>/dev/null << EOF
 add table ip ctrlnat
 add chain ip ctrlnat prerouting { type nat hook prerouting priority dstnat; }
 flush chain ip ctrlnat prerouting
-add rule ip ctrlnat prerouting iifname $iface ip daddr $proxy dnat ip to ip daddr and 0x000000ff or $lan_hex
+add rule ip ctrlnat prerouting iifname $iface ip daddr $proxy dnat ip to ip daddr and $hostmask_hex or $lan_hex
 EOF
         then
-            info "Proxy NETMAP: $proxy → $lan (nft bitwise)"
+            info "Proxy NETMAP: $proxy → $lan (nft bitwise /$prefix)"
             return 0
         fi
         warn "nft NETMAP failed (tried prefix and bitwise) — check nft version on this device"
@@ -248,8 +259,35 @@ supervisor_self_update() {
 # Reads ARP table, probes each live host for open ports, POSTs results to server.
 SCAN_PORTS_CSV="22,23,80,443,554,1883,3000,4200,5000,7080,8080,8123,8443,8888,9090,9443"
 
+# Actively populate the ARP cache across the whole LAN so the scan covers the
+# entire subnet (incl. the upper half of a /23) instead of only hosts already in
+# the passive cache. Bounded concurrency; skipped for subnets larger than /22.
+_sweep_arp() {
+    local cidr="$1" net prefix a b c d base hostbits size i count ip_int o1 o2 o3 o4
+    [ -z "$cidr" ] && return 0
+    net=${cidr%/*}; prefix=${cidr#*/}
+    case "$prefix" in ''|*[!0-9]*) prefix=24 ;; esac
+    [ "$prefix" -lt 22 ] && return 0   # > ~1022 hosts: too large to sweep each beat
+    a=${net%%.*}; net=${net#*.}; b=${net%%.*}; net=${net#*.}; c=${net%%.*}; d=${net#*.}
+    base=$(( a*16777216 + b*65536 + c*256 + d ))
+    hostbits=$((32 - prefix)); size=$(( 1 << hostbits ))
+    i=1; count=0
+    while [ "$i" -lt $((size - 1)) ]; do          # skip network (.0) and broadcast
+        ip_int=$((base + i))
+        o1=$(( (ip_int>>24)&255 )); o2=$(( (ip_int>>16)&255 )); o3=$(( (ip_int>>8)&255 )); o4=$(( ip_int&255 ))
+        ping -c1 -W1 "$o1.$o2.$o3.$o4" >/dev/null 2>&1 &
+        count=$((count + 1))
+        [ $((count % 128)) -eq 0 ] && wait        # bound concurrency to ~128 in flight
+        i=$((i + 1))
+    done
+    wait
+}
+
 scan_lan() {
     [ -z "${DEVICE_TOKEN:-}" ] || [ -z "${DEVICE_ID:-}" ] && return 0
+
+    # Sweep the LAN first so quiet hosts across the whole subnet are in ARP.
+    _sweep_arp "${LAN_SUBNET:-}"
 
     # Build JSON array of discovered devices from ARP table
     local devices_json=""
