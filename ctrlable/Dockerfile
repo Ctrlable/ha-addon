@@ -10,9 +10,11 @@ RUN apk add --no-cache \
     iptables \
     ip6tables \
     python3 \
+    py3-websockets \
     ca-certificates
 
 COPY store/ /opt/ctrlable/store/
+COPY shell_bridge.py /opt/ctrlable/shell_bridge.py
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
 
