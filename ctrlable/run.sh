@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-ADDON_VERSION="22"
+ADDON_VERSION="23"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
@@ -247,6 +247,11 @@ supervisor_self_update() {
         -X POST "http://supervisor/addons/self/update" \
         -H "Authorization: Bearer $token" \
         -H "Content-Type: application/json" 2>/dev/null) || code="ERR"
+    # Record the outcome so the next heartbeat reports it to the portal (support
+    # can see whether an update actually landed — reload 403 was our blind spot).
+    printf 'self_update: store_reload=%s addon_update=%s @%s' \
+        "${reload_code:-?}" "$code" "$(date -u +%H:%MZ 2>/dev/null)" \
+        > /tmp/ctrlable_cmd_result 2>/dev/null || true
     if [ "$code" = "200" ]; then
         info "Self-update triggered via Supervisor API — addon will restart"
         return 0
@@ -376,11 +381,34 @@ install_ctrlable_store() {
     fi
 }
 
+# Live NAT/tunnel diagnostics for the portal (support can see the data path
+# without a shell). Bounded in size.
+collect_diag() {
+    {
+        echo "# nft ip ctrlnat"; nft list table ip ctrlnat 2>/dev/null || echo "(no ctrlnat table)"
+        echo; echo "# ip route"; ip route 2>/dev/null
+        echo; echo "# wg ${WG_IFACE:-}"; wg show "${WG_IFACE:-}" 2>/dev/null
+    } 2>/dev/null | head -c 6000
+}
+
+# Authoritative installed package version, from Supervisor (no hardcoded string
+# to drift). Empty if the token/API isn't available.
+get_addon_version() {
+    local tok="${SUPERVISOR_TOKEN:-${HASSIO_TOKEN:-}}"
+    [ -z "$tok" ] && { echo ""; return; }
+    curl -sS --max-time 10 -H "Authorization: Bearer $tok" http://supervisor/addons/self/info 2>/dev/null \
+      | python3 -c 'import sys,json
+try: print(json.load(sys.stdin).get("data",{}).get("version","") or "")
+except Exception: print("")' 2>/dev/null || echo ""
+}
+
 run_heartbeat() {
     info "Starting heartbeat loop (every 60s, LAN scan every 5 min)"
     install_ctrlable_store || true
     local lan_registered="${1:-0}"
     local hb_count=0
+    local addon_pkg_version
+    addon_pkg_version=$(get_addon_version)
     while true; do
         RX=0; TX=0
         DUMP=$(wg show "$WG_IFACE" dump 2>/dev/null | tail -1) || true
@@ -392,12 +420,32 @@ run_heartbeat() {
         LAN_JSON=$(detect_all_lan_subnets_json)
 
         HB_TMPF="/tmp/ctrlable_hb"
+        # Build the payload with python3 so diagnostics (multi-line nft/route/wg)
+        # are JSON-escaped safely. nat_diag only on the scan beat (~5 min) to keep
+        # most heartbeats small; version + last command result go every beat.
+        HB_CMDRES=$(cat /tmp/ctrlable_cmd_result 2>/dev/null || true)
+        HB_DIAG=""
+        [ $(( hb_count % 5 )) -eq 0 ] && HB_DIAG=$(collect_diag)
+        HB_PAYLOAD=$(RX="${RX:-0}" TX="${TX:-0}" AV="$ADDON_VERSION" PKG="${addon_pkg_version:-}" \
+                     LANJSON="$LAN_JSON" DIAG="$HB_DIAG" CMDRES="$HB_CMDRES" python3 -c '
+import os, json
+try: lc = json.loads(os.environ.get("LANJSON") or "[]")
+except Exception: lc = []
+d = {"rx_bytes": int(os.environ.get("RX") or 0),
+     "tx_bytes": int(os.environ.get("TX") or 0),
+     "agent_version": os.environ.get("AV") or None,
+     "lan_candidates": lc}
+for k, e in (("addon_version","PKG"), ("nat_diag","DIAG"), ("command_result","CMDRES")):
+    v = os.environ.get(e)
+    if v: d[k] = v
+print(json.dumps(d))' 2>/dev/null) \
+            || HB_PAYLOAD="{\"rx_bytes\":${RX:-0},\"tx_bytes\":${TX:-0},\"agent_version\":\"${ADDON_VERSION}\",\"lan_candidates\":${LAN_JSON}}"
         HB_CODE=$(curl -skS --max-time 10 \
             -w "%{http_code}" -o "$HB_TMPF" \
             -X POST "$API_BASE/devices/$DEVICE_ID/heartbeat" \
             -H "Content-Type: application/json" \
             -H "X-Device-Token: $DEVICE_TOKEN" \
-            -d "{\"rx_bytes\":${RX:-0},\"tx_bytes\":${TX:-0},\"agent_version\":\"${ADDON_VERSION}\",\"lan_candidates\":${LAN_JSON}}" \
+            -d "$HB_PAYLOAD" \
             2>"$HB_TMPF.err") || HB_CODE="ERR"
         if [ "$HB_CODE" = "200" ]; then
             HB_BODY=$(cat "$HB_TMPF" 2>/dev/null | tr -d ' \t') || HB_BODY=""
