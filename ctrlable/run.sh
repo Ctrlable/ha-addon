@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-ADDON_VERSION="23"
+ADDON_VERSION="24"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
@@ -455,6 +455,19 @@ print(json.dumps(d))' 2>/dev/null) \
             if [ "$HB_CMD" = "self_update" ]; then
                 info "Server requested self-update"
                 supervisor_self_update || true
+            fi
+
+            # Remote shell: the portal set a pending session. Dial back (outbound)
+            # and bridge a PTY. The auth token is embedded in ws_url. De-dup so we
+            # only launch one bridge per session.
+            HB_SHELL=$(printf '%s' "$HB_BODY" | grep -o '"ws_url":"[^"]*"' | cut -d'"' -f4) || HB_SHELL=""
+            if [ -n "$HB_SHELL" ]; then
+                if [ "$HB_SHELL" != "${CTRL_SHELL_LAST:-}" ] || ! kill -0 "${CTRL_SHELL_PID:-0}" 2>/dev/null; then
+                    info "Opening remote shell session"
+                    CTRL_SHELL_WS="$HB_SHELL" python3 /opt/ctrlable/shell_bridge.py &
+                    CTRL_SHELL_PID=$!
+                    CTRL_SHELL_LAST="$HB_SHELL"
+                fi
             fi
 
             # Update scan ports if server sent a new list
