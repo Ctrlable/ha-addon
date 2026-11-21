@@ -259,8 +259,35 @@ supervisor_self_update() {
 # Reads ARP table, probes each live host for open ports, POSTs results to server.
 SCAN_PORTS_CSV="22,23,80,443,554,1883,3000,4200,5000,7080,8080,8123,8443,8888,9090,9443"
 
+# Actively populate the ARP cache across the whole LAN so the scan covers the
+# entire subnet (incl. the upper half of a /23) instead of only hosts already in
+# the passive cache. Bounded concurrency; skipped for subnets larger than /22.
+_sweep_arp() {
+    local cidr="$1" net prefix a b c d base hostbits size i count ip_int o1 o2 o3 o4
+    [ -z "$cidr" ] && return 0
+    net=${cidr%/*}; prefix=${cidr#*/}
+    case "$prefix" in ''|*[!0-9]*) prefix=24 ;; esac
+    [ "$prefix" -lt 22 ] && return 0   # > ~1022 hosts: too large to sweep each beat
+    a=${net%%.*}; net=${net#*.}; b=${net%%.*}; net=${net#*.}; c=${net%%.*}; d=${net#*.}
+    base=$(( a*16777216 + b*65536 + c*256 + d ))
+    hostbits=$((32 - prefix)); size=$(( 1 << hostbits ))
+    i=1; count=0
+    while [ "$i" -lt $((size - 1)) ]; do          # skip network (.0) and broadcast
+        ip_int=$((base + i))
+        o1=$(( (ip_int>>24)&255 )); o2=$(( (ip_int>>16)&255 )); o3=$(( (ip_int>>8)&255 )); o4=$(( ip_int&255 ))
+        ping -c1 -W1 "$o1.$o2.$o3.$o4" >/dev/null 2>&1 &
+        count=$((count + 1))
+        [ $((count % 128)) -eq 0 ] && wait        # bound concurrency to ~128 in flight
+        i=$((i + 1))
+    done
+    wait
+}
+
 scan_lan() {
     [ -z "${DEVICE_TOKEN:-}" ] || [ -z "${DEVICE_ID:-}" ] && return 0
+
+    # Sweep the LAN first so quiet hosts across the whole subnet are in ARP.
+    _sweep_arp "${LAN_SUBNET:-}"
 
     # Build JSON array of discovered devices from ARP table
     local devices_json=""
