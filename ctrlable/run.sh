@@ -1,7 +1,21 @@
 #!/usr/bin/env bash
 set -e
 
-ADDON_VERSION="24"
+# The HA base image boots under s6-overlay, which stores the container env
+# (SUPERVISOR_TOKEN, HASSIO_TOKEN, …) in /run/s6/container_environment/ and only
+# exports it to services launched via `with-contenv`. Our shebang is plain bash,
+# so without this the Supervisor API token is absent and every self-update /
+# addons-API call silently fails. Load it explicitly so we don't depend on the
+# shebang.
+if [ -d /run/s6/container_environment ]; then
+    for _envf in /run/s6/container_environment/*; do
+        [ -f "$_envf" ] || continue
+        export "$(basename "$_envf")=$(cat "$_envf")"
+    done
+    unset _envf
+fi
+
+ADDON_VERSION="25"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
