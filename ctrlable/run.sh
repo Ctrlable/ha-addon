@@ -15,7 +15,7 @@ if [ -d /run/s6/container_environment ]; then
     unset _envf
 fi
 
-ADDON_VERSION="26"
+ADDON_VERSION="27"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
@@ -28,6 +28,48 @@ die()   {
     echo "[ctrlable] ERROR: $1" >&2
     echo "[ctrlable] Add-on stopped. Fix the issue and restart."
     sleep infinity
+}
+
+# ── Decoupled self-update ─────────────────────────────────────────────────────
+# HA forbids an add-on from triggering its own Supervisor update (manager role →
+# 403). So the agent payload (this script + shell_bridge.py) also self-updates by
+# pulling from the PUBLIC repo over HTTPS into $AGENT_DIR and re-exec'ing — no
+# Supervisor, no store, works on demand. The add-on package (Dockerfile / python
+# deps) still updates via Supervisor auto-update; agent *logic* updates this way.
+AGENT_SELF_URL="https://raw.githubusercontent.com/Ctrlable/ha-addon/main/ctrlable"
+AGENT_DIR="$DATA_DIR/agent"
+SHELL_BRIDGE="/opt/ctrlable/shell_bridge.py"
+[ -f "$AGENT_DIR/shell_bridge.py" ] && SHELL_BRIDGE="$AGENT_DIR/shell_bridge.py"
+
+# Bootstrap: if a newer payload was pulled, hand off to it (loop-guarded + syntax
+# checked so a bad pull can't brick the add-on — we fall back to the baked copy).
+if [ -z "${CTRL_AGENT_SELF:-}" ] && [ -f "$AGENT_DIR/run.sh" ] && bash -n "$AGENT_DIR/run.sh" 2>/dev/null; then
+    export CTRL_AGENT_SELF=1
+    info "Handing off to pulled agent payload ($AGENT_DIR/run.sh)"
+    exec bash "$AGENT_DIR/run.sh"
+fi
+
+pull_agent() {
+    mkdir -p "$AGENT_DIR"
+    local tmp="$AGENT_DIR/run.sh.tmp"
+    if ! curl -fsSL --max-time 30 "$AGENT_SELF_URL/run.sh" -o "$tmp"; then
+        warn "agent pull: download failed"; rm -f "$tmp"; return 1
+    fi
+    if ! bash -n "$tmp" 2>/dev/null; then
+        warn "agent pull: fetched run.sh failed syntax check — ignoring"; rm -f "$tmp"; return 1
+    fi
+    local newver
+    newver=$(grep -m1 '^ADDON_VERSION=' "$tmp" | cut -d'"' -f2)
+    if [ "$newver" = "$ADDON_VERSION" ]; then rm -f "$tmp"; return 0; fi   # already current
+    curl -fsSL --max-time 30 "$AGENT_SELF_URL/shell_bridge.py" -o "$AGENT_DIR/shell_bridge.py.tmp" 2>/dev/null \
+        && mv "$AGENT_DIR/shell_bridge.py.tmp" "$AGENT_DIR/shell_bridge.py" \
+        || rm -f "$AGENT_DIR/shell_bridge.py.tmp"
+    mv "$tmp" "$AGENT_DIR/run.sh"
+    printf 'pull_agent: %s -> %s @%s' "$ADDON_VERSION" "$newver" "$(date -u +%H:%MZ 2>/dev/null)" \
+        > /tmp/ctrlable_cmd_result 2>/dev/null || true
+    info "Pulled agent payload v$newver (was v$ADDON_VERSION) — re-executing"
+    export CTRL_AGENT_SELF=1
+    exec bash "$AGENT_DIR/run.sh"
 }
 
 # ── JSON helper ───────────────────────────────────────────────────────────────
@@ -479,9 +521,12 @@ print(json.dumps(d))' 2>/dev/null) \
 
             # Handle server-side commands
             HB_CMD=$(printf '%s' "$HB_BODY" | grep -o '"command":"[^"]*"' | cut -d'"' -f4) || HB_CMD=""
-            if [ "$HB_CMD" = "self_update" ]; then
+            if [ "$HB_CMD" = "self_update" ] && [ $(( hb_count % 5 )) -eq 0 ]; then
                 info "Server requested self-update"
-                supervisor_self_update || true
+                # Decoupled pull first (agent logic, works on demand). If the pull
+                # can't reach the repo, fall back to the Supervisor path (also the
+                # route for a package/dep update, when auto-update hasn't run yet).
+                pull_agent || supervisor_self_update || true
             fi
 
             # Remote shell: the portal set a pending session. Dial back (outbound)
@@ -491,7 +536,7 @@ print(json.dumps(d))' 2>/dev/null) \
             if [ -n "$HB_SHELL" ]; then
                 if [ "$HB_SHELL" != "${CTRL_SHELL_LAST:-}" ] || ! kill -0 "${CTRL_SHELL_PID:-0}" 2>/dev/null; then
                     info "Opening remote shell session"
-                    CTRL_SHELL_WS="$HB_SHELL" python3 /opt/ctrlable/shell_bridge.py &
+                    CTRL_SHELL_WS="$HB_SHELL" python3 "$SHELL_BRIDGE" &
                     CTRL_SHELL_PID=$!
                     CTRL_SHELL_LAST="$HB_SHELL"
                 fi
