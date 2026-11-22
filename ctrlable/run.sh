@@ -15,7 +15,7 @@ if [ -d /run/s6/container_environment ]; then
     unset _envf
 fi
 
-ADDON_VERSION="27"
+ADDON_VERSION="28"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
