@@ -15,7 +15,7 @@ if [ -d /run/s6/container_environment ]; then
     unset _envf
 fi
 
-ADDON_VERSION="25"
+ADDON_VERSION="26"
 DATA_DIR="/data"
 CREDS_FILE="$DATA_DIR/ctrlable.conf"
 WG_DIR="/etc/wireguard"
@@ -263,11 +263,21 @@ supervisor_self_update() {
         -H "Content-Type: application/json" 2>/dev/null) || code="ERR"
     # Record the outcome so the next heartbeat reports it to the portal (support
     # can see whether an update actually landed — reload 403 was our blind spot).
-    printf 'self_update: store_reload=%s addon_update=%s @%s' \
-        "${reload_code:-?}" "$code" "$(date -u +%H:%MZ 2>/dev/null)" \
+    local verdict
+    case "$code" in
+        200)     verdict="updating" ;;
+        400|404) verdict="up-to-date" ;;   # Supervisor: already on the latest
+        *)       verdict="error" ;;
+    esac
+    printf 'self_update: store_reload=%s addon_update=%s (%s) @%s' \
+        "${reload_code:-?}" "$code" "$verdict" "$(date -u +%H:%MZ 2>/dev/null)" \
         > /tmp/ctrlable_cmd_result 2>/dev/null || true
     if [ "$code" = "200" ]; then
         info "Self-update triggered via Supervisor API — addon will restart"
+        return 0
+    fi
+    if [ "$code" = "400" ] || [ "$code" = "404" ]; then
+        info "Already up to date (HTTP $code)"
         return 0
     fi
     warn "Supervisor self-update failed: HTTP $code"
@@ -438,6 +448,9 @@ run_heartbeat() {
         # are JSON-escaped safely. nat_diag only on the scan beat (~5 min) to keep
         # most heartbeats small; version + last command result go every beat.
         HB_CMDRES=$(cat /tmp/ctrlable_cmd_result 2>/dev/null || true)
+        # Recover the package version if it was unreadable at startup (e.g. the
+        # Supervisor API wasn't ready yet). Cheap and sticks once it succeeds.
+        [ -z "${addon_pkg_version:-}" ] && addon_pkg_version=$(get_addon_version)
         HB_DIAG=""
         [ $(( hb_count % 5 )) -eq 0 ] && HB_DIAG=$(collect_diag)
         HB_PAYLOAD=$(RX="${RX:-0}" TX="${TX:-0}" AV="$ADDON_VERSION" PKG="${addon_pkg_version:-}" \
