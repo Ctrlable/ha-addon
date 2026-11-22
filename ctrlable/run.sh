@@ -468,6 +468,22 @@ try: print(json.load(sys.stdin).get("data",{}).get("version","") or "")
 except Exception: print("")' 2>/dev/null || echo ""
 }
 
+# The web UI this appliance exposes, for the portal's one-click shortcut. HA's
+# real port comes from the Supervisor Core API (it may be customised), so we
+# report what is actually configured rather than assuming 8123. HA Core serves
+# plain HTTP inside the WG tunnel; the portal proxy auto-detects the scheme.
+get_core_webuis() {
+    local tok="${SUPERVISOR_TOKEN:-${HASSIO_TOKEN:-}}"
+    local port=8123
+    if [ -n "$tok" ]; then
+        port=$(curl -sS --max-time 10 -H "Authorization: Bearer $tok" http://supervisor/core/info 2>/dev/null           | python3 -c 'import sys,json
+try: print(int(json.load(sys.stdin).get("data",{}).get("port") or 8123))
+except Exception: print(8123)' 2>/dev/null || echo 8123)
+    fi
+    [ -z "$port" ] && port=8123
+    printf '[{"port":%s,"scheme":"http"}]' "$port"
+}
+
 run_heartbeat() {
     info "Starting heartbeat loop (every 60s, LAN scan every 5 min)"
     install_ctrlable_store || true
@@ -493,10 +509,11 @@ run_heartbeat() {
         # Recover the package version if it was unreadable at startup (e.g. the
         # Supervisor API wasn't ready yet). Cheap and sticks once it succeeds.
         [ -z "${addon_pkg_version:-}" ] && addon_pkg_version=$(get_addon_version)
+        [ -z "${hb_webuis:-}" ] && hb_webuis=$(get_core_webuis)
         HB_DIAG=""
         [ $(( hb_count % 5 )) -eq 0 ] && HB_DIAG=$(collect_diag)
         HB_PAYLOAD=$(RX="${RX:-0}" TX="${TX:-0}" AV="$ADDON_VERSION" PKG="${addon_pkg_version:-}" \
-                     LANJSON="$LAN_JSON" DIAG="$HB_DIAG" CMDRES="$HB_CMDRES" python3 -c '
+                     LANJSON="$LAN_JSON" DIAG="$HB_DIAG" CMDRES="$HB_CMDRES" WEBUIS="${hb_webuis:-}" python3 -c '
 import os, json
 try: lc = json.loads(os.environ.get("LANJSON") or "[]")
 except Exception: lc = []
@@ -507,6 +524,10 @@ d = {"rx_bytes": int(os.environ.get("RX") or 0),
 for k, e in (("addon_version","PKG"), ("nat_diag","DIAG"), ("command_result","CMDRES")):
     v = os.environ.get(e)
     if v: d[k] = v
+try:
+    _w = json.loads(os.environ.get("WEBUIS") or "")
+    if _w: d["web_uis"] = _w
+except Exception: pass
 print(json.dumps(d))' 2>/dev/null) \
             || HB_PAYLOAD="{\"rx_bytes\":${RX:-0},\"tx_bytes\":${TX:-0},\"agent_version\":\"${ADDON_VERSION}\",\"lan_candidates\":${LAN_JSON}}"
         HB_CODE=$(curl -skS --max-time 10 \
